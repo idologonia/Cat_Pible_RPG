@@ -1,0 +1,83 @@
+import os,pathlib
+ROOT=pathlib.Path(__file__).resolve().parents[2]
+GAME=(ROOT/'cat-pibble-rpg.html').as_uri()
+SHOTS=str(ROOT/'tests'/'shots')+'/'
+os.makedirs(SHOTS,exist_ok=True)
+from playwright.sync_api import sync_playwright
+errs=[]
+def opts(pg): return pg.evaluate("[...document.querySelectorAll('#dlgBtns button')].map(b=>b.textContent)")
+def pick(pg,i): pg.locator('#dlgBtns button').nth(i).click();pg.wait_for_timeout(150)
+def talk(pg,npc):
+    pg.evaluate(f"(()=>{{const n=Game.npcs.find(n=>n.id==='{npc}');Game.hero.x=n.x+0.6;Game.hero.y=n.y+0.6;}})()");pg.wait_for_timeout(300)
+    pg.evaluate(f"Game.interact(Game.npcs.find(n=>n.id==='{npc}'))");pg.wait_for_timeout(150)
+def qs(pg,ids): return pg.evaluate("JSON.stringify(Object.fromEntries(Object.entries(Game.flags.q||{}).filter(([k])=>"+str(ids)+".includes(k)).map(([k,v])=>[k,v.state+':'+v.step+':'+v.cnt])))")
+def killall(pg,cond='true'): pg.evaluate(f"for(const c of [...Game.combatants])if(c.isEnemy&&!c.dead&&({cond})){{c.hp=1;hitTarget(c,{{mult:500}});}}");pg.wait_for_timeout(300)
+with sync_playwright() as p:
+    b=p.chromium.launch();pg=b.new_page(viewport={'width':1280,'height':760})
+    pg.on('pageerror',lambda e: errs.append(str(e)+' '+(e.stack or '')[:400]))
+    pg.goto(GAME);pg.wait_for_timeout(400);pg.click('#btnNew');pg.click('#btnSkip');pg.click('#btnStart');pg.wait_for_timeout(600)
+    print('xp/kill bandit lv1,lv10,lv20:',pg.evaluate("[1,10,20].map(l=>{Game.heroData.level=l;const e=makeCombatant({type:'enemy',etype:'bandit',x:1,y:1,level:l});return enemyXp(e)+'/'+xpToNext(l)})"))
+    pg.evaluate("Game.heroData.level=1;Game.heroData.xp=0")
+    print('quest rewards main/outpost/cheese:',pg.evaluate("[QUESTS.main.reward.xp,QUESTS.outpost.reward.xp,QUESTS.cheese.reward.xp,QUESTS.main.reward.gold]"))
+    print('coins avg bandit lv10:',pg.evaluate("(()=>{Game.loadLocation('outskirts');let s=0;for(let i=0;i<200;i++){Game.coins.length=0;rollLoot(makeCombatant({type:'enemy',etype:'bandit',x:30,y:30,level:10}));for(const c of Game.coins)s+=c.amount;}return (s/200).toFixed(1)})()"))
+    pg.evaluate("while(Game.heroData.level<14)gainXp(xpToNext(Game.heroData.level))")
+    print('lvl',pg.evaluate('Game.heroData.level'))
+    # союзники з HP
+    pg.evaluate("Quests.start('main');Quests.complete('main');Quests.start('outpost');Quests.complete('outpost');Quests.start('partisans');(Game.flags.killed||(Game.flags.killed={})).sirokhvist=true")
+    pg.evaluate("Game.changeLocation('village',{x:30,y:41})");pg.wait_for_timeout(1300)
+    talk(pg,'tuzya');pick(pg,0);pick(pg,0);pick(pg,0);pick(pg,1);pg.wait_for_timeout(300)
+    print('allies',pg.evaluate("Game.allies.map(a=>a.id+':'+a.hp+'/'+a.maxHp+' arm'+a.armor)"))
+    pg.evaluate("Game.heroData.hp=99999;Game.derived.maxHp=99999")
+    pg.evaluate("(()=>{const e=Game.combatants.find(c=>c.isEnemy&&!c.dead&&c.group==='v2');Game.hero.x=e.x+5;Game.hero.y=e.y+3;for(const a of Game.allies){a.x=e.x+1;a.y=e.y+0.6;}for(const c of Game.combatants)if(c.group==='v2')c.aggro(false);})()")
+    log=[]
+    for i in range(16):
+        pg.wait_for_timeout(500);log.append(pg.evaluate("Game.allies.map(a=>(a.downed?'D':a.retreatT>0?'R':'')+Math.round(a.hp)+'p'+a.potions).join('|')"))
+    print('ally hp log',log)
+    pg.screenshot(path=SHOTS+'a1_allyfight.png')
+    pg.evaluate("const a=Game.allies[0];a.hp=1;allyTakeDamage(a,999)")
+    print('downed',pg.evaluate("Game.allies.map(a=>a.downed)"))
+    pg.evaluate("killAllNear=1");killall(pg,"Math.hypot(c.x-Game.hero.x,c.y-Game.hero.y)<20")
+    pg.evaluate("for(const a of Game.allies)if(!a.downed){a.x=Game.allies[0].x+3;a.y=Game.allies[0].y;}")
+    pg.wait_for_timeout(4500);print('revived by ally',pg.evaluate("Game.allies.map(a=>a.downed+':'+Math.round(a.hp))"))
+    pg.evaluate("const a=Game.allies[1];allyTakeDamage(a,99999);Game.hero.x=a.x+0.8;Game.hero.y=a.y+0.5")
+    pg.wait_for_timeout(300);print(' target',pg.evaluate("Game.interactTarget&&Game.interactLabel(Game.interactTarget)"))
+    pg.keyboard.press('KeyE');pg.wait_for_timeout(300);print('revived by hero',pg.evaluate("Game.allies.map(a=>a.downed+':'+Math.round(a.hp))"),pg.evaluate("Inv.count(Game.heroData,'hp_potion')"))
+    pg.screenshot(path=SHOTS+'a2_revive.png')
+    # Сирний Хутір
+    pg.evaluate("Game.changeLocation('forest',{x:60,y:54})");pg.wait_for_timeout(1300)
+    pg.evaluate("Game.hero.x=63.3;Game.hero.y=54");pg.wait_for_timeout(1500)
+    print('loc',pg.evaluate('[Game.locationId,Math.round(Game.hero.x),Math.round(Game.hero.y)]'))
+    pg.evaluate("Game.hero.x=27;Game.hero.y=30");pg.wait_for_timeout(500);pg.screenshot(path=SHOTS+'a3_cheese.png')
+    talk(pg,'brynza');print(opts(pg));pick(pg,0);pick(pg,0);pick(pg,0);print(qs(pg,['cheese']))
+    talk(pg,'syrnyk');pg.wait_for_timeout(100);pg.evaluate("UI.closeDialog()");print(qs(pg,['cheese']))
+    pg.evaluate("Game.hero.x=36;Game.hero.y=40");pg.wait_for_timeout(500);pg.screenshot(path=SHOTS+'a4_field.png')
+    killall(pg,"c.group==='chR'");print(qs(pg,['cheese']))
+    pg.evaluate("Game.hero.x=28.5;Game.hero.y=50.6");pg.wait_for_timeout(300);pg.keyboard.press('KeyE');pg.wait_for_timeout(200);pg.evaluate("UI.closeDialog()");print(qs(pg,['cheese']))
+    pg.evaluate("Game.hero.x=28.5;Game.hero.y=55.3");pg.wait_for_timeout(1500)
+    print('loc',pg.evaluate('[Game.locationId,Math.round(Game.hero.x),Math.round(Game.hero.y)]'))
+    pg.evaluate("Game.hero.x=28;Game.hero.y=12");pg.wait_for_timeout(600);pg.screenshot(path=SHOTS+'a5_swamp.png')
+    # бруд сповільнює
+    pg.evaluate("Game.hero.iframe=1e9")
+    print('mud slow',pg.evaluate("tileSlow()"),pg.evaluate("Game.world.tile(28,12)===T.MUD"))
+    talk(pg,'osoka');print(opts(pg));pick(pg,0);pick(pg,0);print(qs(pg,['lilies']))
+    pg.screenshot(path=SHOTS+'a6_witch.png');pg.evaluate("UI.closeDialog()")
+    pg.evaluate("for(const o of Game.world.objects)if(o.kind==='node'&&o.res==='swamp_lily')gatherNode(o)");pg.wait_for_timeout(1700);print('lilies',qs(pg,['lilies']),pg.evaluate("Inv.count(Game.heroData,'swamp_lily')"))
+    talk(pg,'osoka');print(opts(pg));pick(pg,0);pick(pg,0);print(qs(pg,['lilies']))
+    killall(pg,"c.group!=='sB'")
+    for i in range(5):
+        pg.evaluate(f"(()=>{{const o=Game.world.objects.find(o=>o.kind==='cwheel'&&o.wheel==={i});Game.hero.x=o.x+0.7;Game.hero.y=o.y+0.8;}})()");pg.wait_for_timeout(300)
+        pg.evaluate(f"takeWheel(Game.world.objects.find(o=>o.kind==='cwheel'&&o.wheel==={i}))")
+    print('wheels',qs(pg,['cheese']),pg.evaluate("Inv.count(Game.heroData,'cheese_wheel')"))
+    pg.evaluate("const b=Game.combatants.find(e=>e.type==='shaman');Game.hero.x=b.x+4;Game.hero.y=b.y+1;b.aggro(false)")
+    log=[]
+    for i in range(10):
+        pg.wait_for_timeout(400);log.append(pg.evaluate("(()=>{const b=Game.combatants.find(e=>e.type==='shaman');return Math.round(Math.hypot(b.x-Game.hero.x,b.y-Game.hero.y))+(b.wind?'w':'')+'/'+Game.hazards.length})()"))
+        if i==4: pg.evaluate("const b=Game.combatants.find(e=>e.type==='shaman');Game.hero.x=b.x+1;Game.hero.y=b.y+0.5")
+    print('shaman',log);pg.screenshot(path=SHOTS+'a7_shaman.png')
+    killall(pg);pg.wait_for_timeout(400);pg.evaluate("takeWheel(Game.world.objects.find(o=>o.kind==='cwheel'&&o.wheel===4))");pg.wait_for_timeout(300);print('tvan',qs(pg,['cheese']),pg.evaluate("Game.groundItems.map(g=>g.it.name).filter(n=>n.includes('Трясов'))"))
+    pg.evaluate("Game.travelTo('cheese')");pg.wait_for_timeout(1200)
+    talk(pg,'brynza');print(opts(pg));pick(pg,0);print('state',pg.evaluate("[Game.state,document.querySelector('#dialog').className,[...document.querySelectorAll('#dlgBtns button')].map(b=>b.textContent+':'+b.disabled)]"),pg.evaluate("(()=>{const r=document.querySelector('#dlgBtns button').getBoundingClientRect();const el=document.elementFromPoint(r.x+5,r.y+5);return el&&(el.id||el.className)})()"));pick(pg,0);print('done',qs(pg,['cheese']),pg.evaluate("[Game.flags.cheeseFriend,Inv.count(Game.heroData,'aged_cheese')]"))
+    talk(pg,'budz');pick(pg,0);pg.wait_for_timeout(300);pg.screenshot(path=SHOTS+'a8_cheeseshop.png');pg.evaluate("Game.closeShop()")
+    pg.evaluate("Game.openWorldMap()");pg.wait_for_timeout(300);pg.screenshot(path=SHOTS+'a9_map.png');pg.evaluate("Game.closePanel()")
+    pg.evaluate("Game.manualSave()");pg.wait_for_timeout(300)
+    print('ERRORS',errs[:5]);b.close()
