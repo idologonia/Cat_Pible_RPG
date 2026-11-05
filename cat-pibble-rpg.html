@@ -193,7 +193,7 @@ body.touch .kb{display:none}
 .hsep{width:2px;background:rgba(255,243,201,.25);margin:2px 1px}
 #buffs{position:absolute;left:50%;bottom:92px;transform:translateX(-50%);display:flex;gap:6px}
 .buff{background:rgba(43,31,46,.88);border:2px solid var(--gold);border-radius:4px;color:#fff3c9;font-size:12px;font-weight:800;padding:2px 7px;white-space:nowrap}
-#safeTag{position:absolute;left:12px;top:92px;background:rgba(74,140,62,.92);color:#fff;border:2px solid var(--ink);border-radius:6px;padding:3px 8px;font-size:12px;font-weight:800}
+#safeTag{position:absolute;left:12px;top:100px;background:rgba(74,140,62,.92);color:#fff;border:2px solid var(--ink);border-radius:6px;padding:3px 8px;font-size:12px;font-weight:800}
 #hurtFlash{position:absolute;inset:0;pointer-events:none;opacity:0;background:radial-gradient(ellipse at center,rgba(200,0,0,0) 45%,rgba(200,20,20,.55) 100%)}
 #touchBtns{position:absolute;right:0;bottom:0;width:260px;height:200px;pointer-events:none}
 #touchBtns .hslot{position:absolute;pointer-events:auto;border-radius:50%;width:58px;height:58px;opacity:.92}
@@ -361,6 +361,38 @@ body.touch #questPop{top:46%}
 #hudBtns{flex-wrap:wrap;justify-content:flex-end;max-width:470px}
 body.touch #hudBtns{max-width:none;flex-wrap:nowrap;gap:4px}
 body.touch #hudBtns .btn{padding:5px 8px;font-size:13px}
+/* Вертикальний телефон: шість кнопок не влазять в один рядок — ставимо їх сіткою 3×2 */
+@media (max-width:600px){
+  body.touch #hudBtns{display:grid;grid-template-columns:repeat(3,auto);gap:4px}
+  body.touch #hudBtns .btn{padding:5px 6px;font-size:12px}
+}
+/* Горизонтальний телефон: напис безпечної зони — під рядком кнопок */
+body.touch #safeTag{top:172px!important}
+@media (max-width:600px){body.touch #safeTag{top:214px!important}body.touch #tracker{top:246px}}
+/* Найвужчі телефони (320 px): менша мінікарта й панель героя, компактніше дерево навичок */
+/* Підпис під мінікартою (час, погода) не розтягує її на панель героя */
+@media (max-width:600px){body.touch #mapBox{max-width:134px}body.touch #clockTag{font-size:10px}}
+@media (max-width:360px){
+  body.touch #mapBox{max-width:114px}
+  body.touch #minimap{width:100px;height:56px}
+  body.touch #heroBox{transform:scale(.75)}
+}
+/* Горизонтальний телефон (низький екран): кнопки навичок менші, напис безпечної зони — ліворуч під панеллю героя */
+@media (max-height:460px){
+  body.touch #touchBtns{transform:scale(.8);transform-origin:right bottom}
+  body.touch #safeTag{top:122px!important;right:auto;left:12px}
+  body.touch #tracker{top:152px}
+}
+/* Найвужчі телефони: сенсорні кнопки трохи менші, кнопка дії — від лівого краю, щоб нічого не виходило за екран */
+@media (max-width:360px){
+  body.touch #touchBtns{transform:scale(.85);transform-origin:right bottom}
+  body.touch #btnInteract{right:auto;left:8px;bottom:118px}
+}
+@media (max-width:380px){
+  #skGrid{grid-template-columns:26px repeat(4,46px);grid-template-rows:repeat(5,58px);gap:6px 5px}
+  .skNode{width:44px;height:44px}.skNode canvas{width:30px;height:30px}
+  .skTreeWrap{padding:6px}
+}
 /* ---------- Місто ---------- */
 #fade{position:absolute;inset:0;background:#120c10;opacity:0;pointer-events:none;transition:opacity .3s;z-index:30}
 #fade.on{opacity:1}
@@ -613,7 +645,7 @@ body.touch #bossBar{top:72px}body.touch #dungeonTag{top:72px}
     <div class="box panel">
       <button class="btn small secondary closeX" id="btnCloseSkills">Закрити</button>
       <h2 id="skTitle">Дерево навичок</h2>
-      <div class="skHead">Вільних очок навичок: <span class="skPts" id="skPoints">0</span><span style="font-weight:600;color:var(--ink2);font-size:13px">1 очко за рівень. Вивчити все неможливо — обирай свій шлях.</span></div>
+      <div class="skHead">Вільних очок навичок: <span class="skPts" id="skPoints">0</span><span id="skRule" style="font-weight:600;color:var(--ink2);font-size:13px">Вивчити все неможливо — обирай свій шлях.</span></div>
       <div class="skLayout">
         <div class="skTreeWrap"><svg id="skLinks"></svg><div id="skGrid"></div></div>
         <div style="flex:1;min-width:260px"><div id="skDetail"></div>
@@ -5962,6 +5994,9 @@ Object.assign(UI, {
   renderSkills(){
     const hd=Game.heroData,tree=SKILL_TREE[hd.cls],P=this.skPending,used=Object.values(P).reduce((a,b)=>a+b,0);
     $('skPoints').textContent=hd.skillPoints-used;
+    {const L=CONFIG.leveling,n=L.skillEvery,k=L.skillPointsPerStep,m10=n%10,m100=n%100;
+     const lv=m10===1&&m100!==11?'рівень':m10>=2&&m10<=4&&(m100<12||m100>14)?'рівні':'рівнів';
+     $('skRule').textContent=`${k} ${k===1?'очко':'очки'} раз на ${n} ${lv}. Вивчити все неможливо — обирай свій шлях.`;}
     const grid=$('skGrid');grid.innerHTML='';
     const TL=CONFIG.skillTree.tierLevels;
     for(let t=1;t<=5;t++)grid.insertAdjacentHTML('beforeend',`<div class="skTier" style="grid-row:${t}">Рів. ${TL[t-1]}</div>`);
