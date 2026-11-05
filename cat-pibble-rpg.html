@@ -395,7 +395,8 @@ body.touch #safeTag{top:172px!important}
 }
 /* ---------- Кооператив ---------- */
 #coop{z-index:40}
-#coop .box{max-height:100%;overflow:auto}
+#coop .box{max-height:100%;overflow:auto;position:relative}
+#coop h2{padding-right:90px}
 #coopTag{position:absolute;left:12px;bottom:128px;background:rgba(43,31,46,.88);color:#f6e8c9;border:2px solid var(--gold);border-radius:6px;padding:3px 10px;font-size:12px;font-weight:800;white-space:nowrap;cursor:pointer;z-index:6}
 body.touch #coopTag{left:12px;bottom:172px;font-size:11px;padding:2px 8px}
 @media (max-height:460px){body.touch #coopTag{top:auto;bottom:auto;left:250px;right:auto;top:12px}}
@@ -764,7 +765,7 @@ body.touch #bossBar{top:72px}body.touch #dungeonTag{top:72px}
     <div class="box panel" style="width:min(520px,100%)">
       <button class="btn small secondary closeX" id="btnCloseCoop">Закрити</button>
       <h2>Кооператив</h2>
-      <div class="invHint" style="text-align:left;margin-bottom:8px">Грайте разом до 4 гравців. Хост створює кімнату у своїй грі — світ, завдання й герої друзів зберігаються в його збереженні. Друзі приєднуються за кодом кімнати. Паузи в кооперативі немає.<br><b>Поки що</b> кооператив працює між вкладками одного браузера на цьому пристрої. Гра через інтернет — наступним етапом.</div>
+      <div class="invHint" style="text-align:left;margin-bottom:8px">Грайте разом до 4 гравців. Хост створює кімнату у своїй грі — світ, завдання й герої друзів зберігаються в його збереженні. Друзі приєднуються за кодом кімнати. Паузи в кооперативі немає.<br>Через інтернет гра йде напряму між браузерами, а для знайомства використовується безкоштовний сервіс ntfy.sh. Деякі мережі (часто мобільний інтернет) блокують прямі з’єднання — тоді спробуйте Wi‑Fi.</div>
       <div id="coopBody"></div>
     </div>
   </div>
@@ -1032,9 +1033,14 @@ const CONFIG = {
   safeZone: { regenMult: 8 },          // у тіні Дерева відновлення ×8
   death: { xpLossPct: 0.1, goldLossPct: 0.1 }, // золото з'явиться на етапі 5
   /* Кооператив: до 4 гравців. Хост рахує світ і ворогів, кожен гравець — свого героя.
-     sendHz — скільки разів на секунду обмінюються станом; timeout — через скільки секунд тиші гравець вважається відключеним;
+     sendHz — скільки разів на секунду обмінюються станом; timeout — через скільки секунд тиші гравець вважається відключеним
+     (timeoutHidden — якщо його вкладку згорнуто: браузер тоді пригальмовує гру); bgStep/bgMaxSteps — як згорнута вкладка надолужує час;
+     signalUrl — публічний сервіс повідомлень для знайомства гравців через інтернет (сама гра йде напряму між браузерами, WebRTC);
+     iceServers — STUN/TURN-сервери для прямого з'єднання; сюди ж можна додати власний TURN (наприклад, на ПК хоста);
      xpRadius — у якому радіусі від убитого ворога герой отримує досвід; enemyHpPerPlayer — +здоров'я ворогам за кожного гравця понад одного */
-  coop: { maxPlayers:4, sendHz:12, timeout:6, joinWait:4, xpRadius:22, enemyHpPerPlayer:0.5, heroSaveEvery:5, flagsEvery:2, lerp:14, spawnSpread:1.2 },
+  coop: { maxPlayers:4, sendHz:12, timeout:6, timeoutHidden:180, bgStep:0.05, bgMaxSteps:24, joinWait:4, joinWaitNet:25, helloRetry:3, iceWait:2.5,
+    signalUrl:'https://ntfy.sh/', iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}],
+    xpRadius:22, enemyHpPerPlayer:0.5, heroSaveEvery:5, flagsEvery:2, lerp:14, spawnSpread:1.2 },
 };
 
 /* ===================== 2. ДАНІ ===================== */
@@ -8441,6 +8447,28 @@ function heroTuple(h,hd,d){
     +((h.aimW||[1,0])[0]).toFixed(2),+((h.aimW||[1,0])[1]).toFixed(2),Math.round(hd.hp),Math.round(d.maxHp),hd.level,
     (b.warcry>0?1:0)|(b.manaShield>0?2:0)|(b.fortify>0?4:0)|(b.eagle>0?8:0),h.dash&&h.dash.kind||0];
 }
+/* Знайомство через інтернет: публічний сервіс повідомлень (ntfy-сумісний: POST /тема, GET /тема/sse).
+   Через нього йдуть лише кілька повідомлень на гравця (стук, пропозиція, відповідь) — сама гра йде напряму. */
+const Signal={es:null,topic:null,
+  url(){return CONFIG.coop.signalUrl.replace(/\/?$/,'/');},
+  sub(topic,on,state){
+    this.close();if(typeof EventSource==='undefined')return false;this.topic=topic;
+    try{this.es=new EventSource(this.url()+topic+'/sse');}catch(e){this.es=null;return false;}
+    this.es.onopen=()=>{state&&state(true);this._onOpen&&this._onOpen();};
+    this.es.onerror=()=>{state&&state(false);};
+    this.es.onmessage=ev=>{try{const d=JSON.parse(ev.data);if(d.event&&d.event!=='message')return;const m=JSON.parse(d.message);if(m&&m.app==='cpr')on(m);}catch(e){}};
+    return true;
+  },
+  pub(m){if(!this.topic)return;m.app='cpr';fetch(this.url()+this.topic,{method:'POST',body:JSON.stringify(m)}).catch(()=>{});},
+  close(){if(this.es){try{this.es.close();}catch(e){}}this.es=null;this.topic=null;this._onOpen=null;},
+};
+function coopTopic(code){return 'catpibble-rpg-coop-'+code;}
+const RTC={
+  gathered(pc){if(pc.iceGatheringState==='complete')return Promise.resolve();
+    return new Promise(res=>{const t=setTimeout(res,CONFIG.coop.iceWait*1000);pc.addEventListener('icegatheringstatechange',()=>{if(pc.iceGatheringState==='complete'){clearTimeout(t);res();}});});},
+  slim(sdp){return sdp.split('\r\n').filter(l=>!(l.startsWith('a=candidate')&&/ tcp /i.test(l))).join('\r\n');},
+  link(dc,pc){return {kind:'rtc',send:m=>{if(dc.readyState==='open')dc.send(JSON.stringify(m));},close(){try{pc.close();}catch(e){}}};},
+};
 function projTuple(p,owner){return [+p.x.toFixed(2),+p.y.toFixed(2),+p.dx.toFixed(3),+p.dy.toFixed(3),Math.round(p.z||0),p.kind,p.speed||0,owner];}
 
 const Net={
@@ -8454,23 +8482,74 @@ const Net={
   isHost(){return this.role==='host';},
   isGuest(){return this.role==='guest';},
   players(){return 1+this.remotes.filter(r=>!r.ghostOnly).length;},
-  /* ---------- Зв'язок ---------- */
+  /* ---------- Зв'язок ----------
+     Два шляхи: вкладки одного браузера (BroadcastChannel) та інтернет (WebRTC напряму між браузерами,
+     знайомство — через Signal). Решта гри бачить лише канали гравців: links[pid] у хоста, hostLink у гостя. */
+  links:{},hostLink:null,bc:null,pcs:{},sigOk:false,
   open(room){
-    this.closeCh();
-    try{this.ch=new BroadcastChannel('cpr_coop_'+room);}catch(e){this.ch=null;return false;}
-    this.ch.onmessage=ev=>{try{this.recv(ev.data);}catch(err){console.error(err);}};
+    if(this.bc){try{this.bc.close();}catch(e){}this.bc=null;}
+    try{this.bc=new BroadcastChannel('cpr_coop_'+room);}catch(e){this.bc=null;return false;}
+    this.bc.onmessage=ev=>{const m=ev.data;if(!m||(m.to&&m.to!==this.pid))return;
+      if(this.isGuest()&&!(this.hostLink&&this.hostLink.kind==='bc'))return;
+      const L=this.isHost()&&!(this.links[m.from]&&this.links[m.from].kind==='rtc')?this.bcLink(m.from):null;
+      try{this.recv(m,L);}catch(err){console.error(err);}};
     return true;
   },
-  closeCh(){if(this.ch){try{this.ch.close();}catch(e){}this.ch=null;}},
-  send(m){if(!this.ch)return;m.from=this.pid;try{this.ch.postMessage(m);}catch(e){console.error(e);}},
+  bcLink(pid){return {kind:'bc',send:m=>{m.to=pid;if(this.bc)this.bc.postMessage(m);},close(){}};},
+  closeCh(){
+    if(this.bc){try{this.bc.close();}catch(e){}this.bc=null;}
+    Signal.close();this.sigOk=false;
+    const pcs=Object.values(this.pcs);setTimeout(()=>{for(const pc of pcs){try{pc.close();}catch(e){}}},300);
+    this.pcs={};this.links={};this.hostLink=null;
+  },
+  send(m){
+    m.from=this.pid;
+    try{
+      if(this.isHost()){
+        if(m.to){const L=this.links[m.to];if(L)L.send(m);return;}
+        for(const pid in this.peers){const L=this.links[pid];if(L)L.send({...m,to:pid});}
+      }else if(this.hostLink)this.hostLink.send(m);
+    }catch(e){console.error(e);}
+  },
   to(pid,m){m.to=pid;this.send(m);},
-  recv(m){
+  recv(m,link){
     if(!m||m.from===this.pid||(m.to&&m.to!==this.pid))return;
+    if(this.isHost()&&link&&m.from&&!this.links[m.from])this.links[m.from]=link;
     if(this.isHost())this.onHost(m);else if(this.isGuest())this.onGuest(m);
+  },
+  /* Хост: гість з інтернету постукав — пропонуємо пряме з'єднання */
+  async hostSig(m){
+    if(!this.isHost())return;
+    if(m.t==='answer'){const pc=this.pcs[m.from];if(pc&&!pc.currentRemoteDescription){try{await pc.setRemoteDescription({type:'answer',sdp:m.sdp});}catch(e){console.error(e);}}return;}
+    if(m.t!=='hello'||!m.from||this.pcs[m.from]||this.links[m.from])return;
+    if(this.players()>=CONFIG.coop.maxPlayers){Signal.pub({t:'full',to:m.from});return;}
+    const pid=m.from,pc=new RTCPeerConnection({iceServers:CONFIG.coop.iceServers});this.pcs[pid]=pc;
+    const dc=pc.createDataChannel('game');
+    const drop=()=>{if(this.peers[pid])this.removePeer(pid,'відключається');delete this.pcs[pid];delete this.links[pid];};
+    dc.onopen=()=>{this.links[pid]=RTC.link(dc,pc);};
+    dc.onmessage=ev=>{let d;try{d=JSON.parse(ev.data);}catch(e){return;}d.from=pid;try{this.recv(d,this.links[pid]);}catch(e){console.error(e);}};
+    dc.onclose=drop;
+    pc.onconnectionstatechange=()=>{if(['failed','closed'].includes(pc.connectionState))drop();};
+    setTimeout(()=>{if(this.pcs[pid]===pc&&!this.links[pid]){try{pc.close();}catch(e){}delete this.pcs[pid];}},CONFIG.coop.joinWaitNet*1000);
+    try{await pc.setLocalDescription(await pc.createOffer());await RTC.gathered(pc);
+      Signal.pub({t:'offer',to:pid,sdp:RTC.slim(pc.localDescription.sdp)});}catch(e){console.error(e);}
+  },
+  /* Гість: прийняти пропозицію хоста */
+  async guestSig(m){
+    if(!this.isGuest()||m.to!==this.pid)return;
+    if(m.t==='full'){this.reset();this.msg('Кімната заповнена (до '+CONFIG.coop.maxPlayers+' гравців).');return;}
+    if(m.t!=='offer'||this.pcs.host)return;
+    const pc=new RTCPeerConnection({iceServers:CONFIG.coop.iceServers});this.pcs.host=pc;this.msg('Хост знайшовся. З’єднуюсь напряму…');
+    pc.ondatachannel=ev=>{const dc=ev.channel;
+      dc.onopen=()=>{this.hostLink=RTC.link(dc,pc);Signal.close();this.msg('З’єднано. Приєднуюсь…');this.send({k:'hello',name:this.name});};
+      dc.onmessage=e=>{let d;try{d=JSON.parse(e.data);}catch(err){return;}try{this.recv(d,null);}catch(err){console.error(err);}};
+      dc.onclose=()=>{if(this.isGuest()&&this.hostLink)this.hostGone('Зв’язок із хостом утрачено.');};};
+    try{await pc.setRemoteDescription({type:'offer',sdp:m.sdp});await pc.setLocalDescription(await pc.createAnswer());await RTC.gathered(pc);
+      Signal.pub({t:'answer',from:this.pid,sdp:RTC.slim(pc.localDescription.sdp)});}catch(e){console.error(e);this.reset();this.msg('Не вдалося з’єднатися з хостом.');}
   },
   reset(){
     this.closeCh();this.role=null;this.room=null;this.peers={};this.remotes=[];this.ghostAllies=[];this.ghostProj=[];this.ghostHaz=[];
-    this.mirrors=new Map();this._pending=null;this._creating=false;this._joinT=0;this._seed=null;this._allowLoc=false;this._flagsJson='';this._hdJson='';
+    this._hostHidden=false;this.mirrors=new Map();this._pending=null;this._creating=false;this._joinT=0;this._seed=null;this._allowLoc=false;this._flagsJson='';this._hdJson='';
     $('coopTag').classList.add('hidden');
     if(Game.combatants)this.scaleEnemies();
   },
@@ -8478,7 +8557,9 @@ const Net={
   hostRoom(){
     if(!Game.heroData||this.role)return;
     this.role='host';this.pid='host';this.room=coopCode();
-    if(!this.open(this.room)){this.role=null;UI.toast('Браузер не підтримує кооператив між вкладками.',3);return;}
+    const local=this.open(this.room);
+    this.sigOk=typeof RTCPeerConnection!=='undefined'&&Signal.sub(coopTopic(this.room),m=>this.hostSig(m),ok=>{this.sigOk=ok;this.renderPanel();});
+    if(!local&&!this.sigOk){this.role=null;UI.toast('Браузер не підтримує кооператив.',3);return;}
     Game.flags.party=Game.flags.party||{};
     UI.toast(`Кімнату ${this.room} створено. Друзі приєднуються за цим кодом.`,3);
     this.updateTag();this.renderPanel();
@@ -8495,6 +8576,7 @@ const Net={
   },
   removePeer(pid,why){
     const p=this.peers[pid];if(!p)return;delete this.peers[pid];
+    const L=this.links[pid];delete this.links[pid];delete this.pcs[pid];if(L)setTimeout(()=>L.close(),300);
     this.remotes=this.remotes.filter(r=>r!==p.r);
     UI.toast(`${p.name} ${why||'виходить із гри'}.`,2.4);this.updateTag();this.renderPanel();requestAutosave('coop');
   },
@@ -8531,6 +8613,7 @@ const Net={
         (Game.flags.party||(Game.flags.party={}))[key]={name:m.name,hd};
         this.addPeer(m.from,m.name,hd);return;}
       case 'bye':if(p){if(m.hd)this.storeHd(p,m.hd);this.removePeer(m.from);}return;
+      case 'vis':if(p){p.hidden=!!m.hid;this.renderPanel();}return;
     }
     if(!p)return;
     switch(m.k){
@@ -8583,15 +8666,24 @@ const Net={
       hz:(G.hazards||[]).map(z=>[z.x,z.y,z.r,+z.t.toFixed(2),z.delay,z.col])};
   },
   /* ---------- Гість ---------- */
-  join(name,code){
+  join(name,code,mode){
     name=String(name||'').trim().slice(0,16);code=String(code||'').trim().toUpperCase();
     if(!name){this.msg('Вкажи ім’я гравця.');return;}
     if(code.length!==4){this.msg('Код кімнати — 4 літери.');return;}
     Store.set('cpr_coopName',name);
     this.role='guest';this.room=code;this.name=name;this.key=coopKey(name);this.pid='g'+Math.random().toString(36).slice(2,10);
-    if(!this.open(code)){this.reset();this.msg('Браузер не підтримує кооператив між вкладками.');return;}
-    this._joinT=CONFIG.coop.joinWait;this.msg('Шукаю кімнату…');
-    this.send({k:'hello',name});
+    if(mode==='local'){
+      if(!this.open(code)){this.reset();this.msg('Браузер не підтримує кооператив між вкладками.');return;}
+      this.hostLink={kind:'bc',send:m=>{m.to='host';if(this.bc)this.bc.postMessage(m);},close(){}};
+      this._joinT=CONFIG.coop.joinWait;this._joinMode='local';this.msg('Шукаю кімнату в іншій вкладці…');
+      this.send({k:'hello',name});return;
+    }
+    if(typeof RTCPeerConnection==='undefined'){this.reset();this.msg('Цей браузер не підтримує гру через інтернет.');return;}
+    this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='net';this.msg('Шукаю кімнату в інтернеті…');
+    let tries=0;const knock=()=>{if(!this.isGuest()||this.pcs.host||tries>=CONFIG.coop.helloRetry)return;tries++;Signal.pub({t:'hello',from:this.pid});setTimeout(knock,3000);};
+    Signal._onOpen=null;
+    if(!Signal.sub(coopTopic(code),m=>this.guestSig(m),ok=>{if(!ok&&this.isGuest()&&!this.hostLink&&!this.pcs.host)this.msg('Немає зв’язку із сервісом знайомства. Перевір інтернет.');})){this.reset();this.msg('Цей браузер не підтримує гру через інтернет.');return;}
+    Signal._onOpen=()=>{Signal._onOpen=null;knock();};
   },
   leave(){
     if(!this.isGuest())return;
@@ -8613,6 +8705,7 @@ const Net={
         UI.toast('У цій кімнаті в тебе ще немає героя. Створи його — він зберігатиметься в грі хоста.',3.5);return;
       case 'welcome':this._joinT=0;this._creating=false;this.startGuest(m);return;
       case 'end':this.hostGone('Хост закрив кімнату.');return;
+      case 'vis':this._hostHidden=!!m.hid;if(m.hid&&Game.heroData)UI.toast('Хост згорнув гру — світ рухається повільніше, поки він не повернеться.',3);return;
     }
     if(!Game.heroData)return;
     switch(m.k){
@@ -8717,13 +8810,14 @@ const Net={
     for(const r of this.remotes.concat(this.ghostAllies)){if(r.tx==null)continue;r.x+=(r.tx-r.x)*k;r.y+=(r.ty-r.y)*k;r.idleT=(r.idleT||0)+dt;r.hurtT=Math.max(0,(r.hurtT||0)-dt);}
     for(const p of this.ghostProj){p.x+=p.dx*p.speed*dt;p.y+=p.dy*p.speed*dt;}
     if(this.isGuest()){
-      if(this._joinT>0){this._joinT-=dt;if(this._joinT<=0){this.reset();this.msg('Кімнату не знайдено. Перевір код і чи відкрита гра хоста в іншій вкладці цього браузера.');}return;}
+      if(this._joinT>0){this._joinT-=dt;if(this._joinT<=0){const mode=this._joinMode,had=!!this.pcs.host;this.reset();
+        this.msg(mode==='local'?'Кімнату не знайдено. Перевір код і чи відкрита гра хоста в іншій вкладці цього браузера.':had?'Не вдалося з’єднатися напряму. Деякі мережі (часто мобільний інтернет) блокують прямі з’єднання — спробуйте Wi‑Fi.':'Кімнату не знайдено. Перевір код і чи хост створив кімнату.');}return;}
       if(!Game.heroData||!Game.hero)return;
       if(Game.combatants.some(c=>!c.mirror))Net.syncMirrorList();
       if((Game.allies||[]).length)Game.allies=[];
-      if(now-this._lastHost>C.timeout*1000){this.hostGone('Зв’язок із хостом утрачено.');return;}
+      if(now-this._lastHost>(this._hostHidden?C.timeoutHidden:C.timeout)*1000){this.hostGone('Зв’язок із хостом утрачено.');return;}
     }else{
-      for(const pid in this.peers)if(now-this.peers[pid].last>C.timeout*1000)this.removePeer(pid,'відключається (немає зв’язку)');
+      for(const pid in this.peers){const q=this.peers[pid];if(now-q.last>(q.hidden?C.timeoutHidden:C.timeout)*1000)this.removePeer(pid,'відключається (немає зв’язку)');}
       this.scaleEnemies();
       if(this._locDirty&&Game.state!=='travel'&&!Game._traveling&&Object.keys(this.peers).length){this._locDirty=false;this.sendLoc();}
     }
@@ -8754,10 +8848,10 @@ const Net={
     const b=$('coopBody');if(!b||$('coop').classList.contains('hidden'))return;
     const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
     const list=()=>'<ul class="coopList">'+[`<li>👑 ${esc(this.isHost()?Game.heroData.name:this._hostName||'Хост')} — хост</li>`,
-      ...(this.isHost()?Object.values(this.peers).map(p=>`<li>${esc(p.r.name)} (${esc(p.name)}) · рівень ${p.r.level}</li>`):this.remotes.filter(r=>r.pid!=='host').map(r=>`<li>${esc(r.name)} · рівень ${r.level||'?'}</li>`))].join('')+'</ul>';
+      ...(this.isHost()?Object.values(this.peers).map(p=>`<li>${esc(p.r.name)} (${esc(p.name)}) · рівень ${p.r.level}${p.hidden?' · згорнув гру':''}</li>`):this.remotes.filter(r=>r.pid!=='host').map(r=>`<li>${esc(r.name)} · рівень ${r.level||'?'}</li>`))].join('')+'</ul>';
     if(this.isHost()){
       b.innerHTML=`<div class="sectionT">Код кімнати</div><div class="coopCode">${this.room}</div>${list()}
-        <div class="invHint">Друг відкриває гру в іншій вкладці цього браузера: «Кооператив» у головному меню → ім’я → цей код.</div>
+        <div class="invHint">${this.sigOk?'🌐 Кімната відкрита в інтернеті.':'⚠ Інтернет-кімната недоступна (немає зв’язку із сервісом знайомства) — приєднатися можна лише з іншої вкладки цього браузера.'}<br>Друг відкриває гру, «Кооператив» у головному меню → ім’я → цей код → «Через інтернет» (або «З іншої вкладки», якщо грає на цьому ж пристрої).</div>
         <div class="coopRow"><button class="btn small secondary" id="btnCoopClose">Закрити кімнату</button></div>`;
       $('btnCoopClose').onclick=()=>this.closeRoom();
     }else if(this.isGuest()&&Game.heroData){
@@ -8772,11 +8866,13 @@ const Net={
     }else{
       b.innerHTML=`<div class="sectionT">Приєднатися до кімнати</div>
         <div class="coopRow"><label>Ім’я гравця <input id="coopName" maxlength="16" style="width:170px;letter-spacing:0;text-transform:none"></label></div>
-        <div class="coopRow"><label>Код <input id="coopCodeIn" maxlength="4" autocomplete="off"></label><button class="btn" id="btnCoopJoin">Приєднатися</button></div>
+        <div class="coopRow"><label>Код <input id="coopCodeIn" maxlength="4" autocomplete="off"></label></div>
+        <div class="coopRow"><button class="btn" id="btnCoopJoin">Через інтернет</button><button class="btn secondary" id="btnCoopJoinLocal">З іншої вкладки</button></div>
         <div class="coopMsg" id="coopMsg"></div>
         <div class="invHint">За ім’ям хост упізнає твого героя наступного разу.</div>`;
       $('coopName').value=Store.get('cpr_coopName')||'';
-      $('btnCoopJoin').onclick=()=>this.join($('coopName').value,$('coopCodeIn').value);
+      $('btnCoopJoin').onclick=()=>this.join($('coopName').value,$('coopCodeIn').value,'net');
+      $('btnCoopJoinLocal').onclick=()=>this.join($('coopName').value,$('coopCodeIn').value,'local');
       $('coopCodeIn').onkeydown=e=>{e.stopPropagation();if(e.key==='Enter')$('btnCoopJoin').click();};
       $('coopName').onkeydown=e=>e.stopPropagation();
     }
@@ -8816,7 +8912,16 @@ function installCoopHooks(){
   // насіння підземель — щоб у гостя вийшли ті самі коридори
   for(const id in LOCATIONS){const def=LOCATIONS[id];if(typeof def.seed!=='function')continue;const f=def.seed;
     def.seed=()=>{if(Net.isGuest()&&Net._seed!=null)return Net._seed;const s=f();Net.seeds[id]=s;return s;};}
-  {const f=G.tick;G.tick=function(dt){f.call(this,dt);try{Net.update(dt);}catch(e){console.error(e);}};}
+  {const f=G.tick;G.tick=function(dt){if(!Net._bg)Net._rafT=performance.now();f.call(this,dt);try{Net.update(dt);}catch(e){console.error(e);}};}
+  // Згорнута вкладка: браузер зупиняє requestAnimationFrame, тож у кооперативі гру крутить таймер (≈раз на секунду), надолужуючи час
+  Net._rafT=performance.now();
+  setInterval(()=>{
+    const now=performance.now();if(!Net.role||now-Net._rafT<400){Net._bgT=now;return;}
+    const C=CONFIG.coop,el=Math.min(C.bgStep*C.bgMaxSteps,(now-(Net._bgT||now))/1000);Net._bgT=now;
+    const n=Math.max(1,Math.floor(el/C.bgStep));Net._bg=true;
+    try{for(let i=0;i<n;i++)G.tick(C.bgStep);}catch(e){console.error(e);}finally{Net._bg=false;}
+  },250);
+  document.addEventListener('visibilitychange',()=>{if(Net.role)Net.send({k:'vis',hid:document.hidden});});
   {const f=G.loadLocation;G.loadLocation=function(id){
     const r=f.call(this,id);
     if(Net.isHost())Net._locDirty=true;

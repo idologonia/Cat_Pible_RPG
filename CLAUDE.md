@@ -28,7 +28,7 @@
 | `ЗБЕРЕЖЕННЯ` | `SaveSys` (localStorage `cpr_save_N`, `serialize`, `migrate`), `requestAutosave(why)` |
 | `КВЕСТИ` | `QUESTS`, `Quests` (`emit`, `advance`, `step`, `target`, `state`) |
 | далі | дерева навичок, місто (коваль, алхімія, сховище, дошка), зв'язки локацій і світова мапа (`LINKS`, `WORLD_NODES`, `TRAVEL_POINTS`, `nextHop`) |
-| `ЕТАП 12 … ЕТАП 23` | кожен пізній етап — окремим блоком (див. `docs/CHANGELOG.md`) |
+| `ЕТАП 12 … ЕТАП 24` | кожен пізній етап — окремим блоком (див. `docs/CHANGELOG.md`) |
 | `ЗВУК І МУЗИКА` | `AudioSys` (Web Audio-синтез), `MUSIC`, `SFX`, `trackFor(loc)` |
 | `10. ГРА` | `const Game = {…}`: `init`, `loadLocation`, `changeLocation`, головний цикл, бій, смерть |
 
@@ -47,14 +47,16 @@
 
 ### Кооператив (етап 23, блок `ЕТАП 23: КООПЕРАТИВ`)
 
-- `Net` — кімната й обмін повідомленнями. `Net.role`: `null` / `'host'` / `'guest'`. `Net.live()` — є з ким грати (тоді паузи немає). Зв'язок поки що `BroadcastChannel` (вкладки одного браузера); для інтернету замінюються лише `open` / `send` / `closeCh`.
+- `Net` — кімната й обмін повідомленнями. `Net.role`: `null` / `'host'` / `'guest'`. `Net.live()` — є з ким грати (тоді паузи немає).
+- Зв'язок (етап 24): гра бачить лише канали гравців — `Net.links[pid]` у хоста, `Net.hostLink` у гостя (`{kind:'bc'|'rtc', send, close}`). Два шляхи: вкладки одного браузера (`BroadcastChannel`) та інтернет — WebRTC data channel напряму; знайомство (стук → пропозиція → відповідь) через `Signal` — ntfy-сумісний сервіс `CONFIG.coop.signalUrl` (`POST /тема`, `GET /тема/sse`). STUN/TURN — `CONFIG.coop.iceServers`.
+- Згорнута вкладка: браузер зупиняє `requestAnimationFrame`, тому в кооперативі гру крутить `setInterval`, що надолужує час (`bgStep`, `bgMaxSteps`); про згортання сторони повідомляють одна одну (`vis`), і тоді діє довший тайм-аут `timeoutHidden`.
 - **Хост рахує світ** (вороги, здобич, час, погода, прапорці, завдання). **Кожен гравець рахує свого героя**: `Game.hero` / `heroData` / `derived` завжди означають *свого* героя, тому навички, інвентар і дерево навичок працюють без змін.
 - Інші гравці — `Net.remotes` (`Critter` з `isHero` і `isRemote`). Вороги обирають ціль через `coopTargetHero(e)`; шкода чужому герою — `Net.hurtRemote` (через `Game._aiTarget`), відкидання — `Net.knockRemote`.
 - У гостя вороги — копії (`mirror:true`, `coopMirrorUpdate`), побудовані з опису хоста (`Net.descOf` → `makeCombatant(spawn)`). Удари гостя (`hitTarget` / `dealRaw`) ідуть хосту як `{d, st, kv}` (`Net.reportHit`); вбивства й нагороди вирішує хост (`kill`).
 - Підземелля: хост пересилає насіння (`Net.seeds`), тож коридори однакові.
 - Герої гостей зберігаються в `Game.flags.party[ім'я гравця]` (лише в хоста). Гостю прапорці надсилаються без `party` (`Net.flagsForGuest`).
 - У гостя вимкнено: збереження, переходи між локаціями, розмови / двері / торгівлю, події в дорозі, набіги, власних союзників, зміни завдань.
-- Тест: `tests/legacy/test27.py` (дві вкладки в одному контексті браузера).
+- Тести: `tests/legacy/test27.py` (дві вкладки одного браузера), `tests/legacy/test28.py` (WebRTC між різними профілями; знайомство через локальну імітацію `tests/ntfy_mock.py`).
 
 ## Перевірка після кожної зміни
 
@@ -78,5 +80,5 @@ python tests/run_all.py test22      # лише один тест
 
 ## Документи
 
-- `docs/CHANGELOG.md` — що зроблено в етапах 1–23.
+- `docs/CHANGELOG.md` — що зроблено в етапах 1–24.
 - `docs/IDEAS.md` — ідеї, які обговорювали, і можливі наступні кроки.

@@ -23,7 +23,7 @@ with sync_playwright() as p:
     A.click('#btnCloseCoop');A.keyboard.press('Escape');A.wait_for_timeout(200)
     # гість: невідомий — створює героя
     B.goto(GAME);B.wait_for_timeout(400);B.click('#btnCoop1');B.wait_for_timeout(200)
-    B.fill('#coopName','Друг');B.fill('#coopCodeIn',code);B.click('#btnCoopJoin');B.wait_for_timeout(800)
+    B.fill('#coopName','Друг');B.fill('#coopCodeIn',code);B.click('#btnCoopJoinLocal');B.wait_for_timeout(800)
     check(B.evaluate("Game.state")=='create','гість без героя потрапляє на створення героя')
     B.evaluate("UI.cc.cls='mage'");B.fill('#heroName','Мурчик');B.click('#btnStart');B.wait_for_timeout(2500)
     check(B.evaluate("Net.isGuest()&&Game.state==='play'"),'гість у грі')
@@ -111,8 +111,14 @@ with sync_playwright() as p:
     B.evaluate("Net.leave()");B.wait_for_timeout(600)
     check(A.evaluate("Net.remotes.length")==0,'хост бачить, що гість вийшов')
     check(A.evaluate("Game.flags.party['друг'].hd.gold")==777,'прогрес гостя збережено в хоста')
-    B.click('#btnCoop1');B.wait_for_timeout(200);B.fill('#coopCodeIn',code);B.click('#btnCoopJoin');B.wait_for_timeout(2500)
+    B.click('#btnCoop1');B.wait_for_timeout(200);B.fill('#coopCodeIn',code);B.click('#btnCoopJoinLocal');B.wait_for_timeout(2500)
     check(B.evaluate("Net.isGuest()&&Game.heroData&&Game.heroData.name==='Мурчик'&&Game.heroData.gold===777"),'гість повернувся тим самим героєм')
+    # згорнута вкладка не викидає з гри (браузер зупиняє requestAnimationFrame)
+    HIDE="""(()=>{window.__raf=window.requestAnimationFrame;window.requestAnimationFrame=()=>0;Object.defineProperty(document,'hidden',{get:()=>true,configurable:true});document.dispatchEvent(new Event('visibilitychange'));})()"""
+    A.evaluate(HIDE);B.wait_for_timeout(8000)
+    check(B.evaluate("Net.isGuest()&&Game.state==='play'"),'гість лишається в грі, коли вкладку хоста згорнуто')
+    B.evaluate(HIDE);A.wait_for_timeout(8000)
+    check(A.evaluate("Net.remotes.length")==1,'хост не викидає гостя зі згорнутою вкладкою')
     # хост закриває кімнату
     A.evaluate("Net.closeRoom()");A.wait_for_timeout(600)
     check(B.evaluate("Game.state")=='menu' and not B.evaluate("Net.role"),'гість повертається в меню, коли хост закриває кімнату')
