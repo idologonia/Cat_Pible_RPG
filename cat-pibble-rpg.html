@@ -395,6 +395,7 @@ body.touch #safeTag{top:172px!important}
 }
 /* ---------- Кооператив ---------- */
 .coopSrv{border:2px solid #3b2a20;border-radius:6px;padding:6px 8px;margin:4px 0 8px;font-weight:700;font-size:13px;line-height:1.4}
+.coopDiag{font-size:11px;color:var(--ink2);margin:-4px 0 6px;text-align:right}
 .coopSrv.on{background:#d9f2c9}.coopSrv.off{background:#f5d6cc}.coopSrv.wait{background:#efe3c4}
 #coop{z-index:40}
 #coop .box{max-height:100%;overflow:auto;position:relative}
@@ -9031,7 +9032,8 @@ const Net={
     const list=()=>{const who=this.isHost()?this.locsMsg().who:this.who,rows=[];
       for(const p in who){const [n,lv,l]=who[p];rows.push(`<li>${p==='host'?'👑 ':''}${esc(n)} · ${lv} · ${esc(locName(l))}${p===this.pid?' (ти)':''}</li>`);}
       return '<ul class="coopList">'+rows.join('')+'</ul>';};
-    const st=MainServer.statusHtml();
+    const D=MainServer.diag,dg=D?`<div class="coopDiag">Зв’язок: MQTT ${D.mqtt}/${D.mqttAll} · ntfy ${D.ntfy==null?'…':D.ntfy?'✓':'✗'}${this.isHost()?' · запасний шлях '+(MqttRelay.ok()?'✓':'✗'):''}</div>`:'';
+    const st=MainServer.statusHtml()+dg;
     if(this.isHost()){
       b.innerHTML=st+`<div class="sectionT">Код кімнати</div><div class="coopCode">${this.room}</div>${list()}
         <div class="coopRow"><button class="btn small secondary" id="btnCoopClose">Закрити кімнату</button></div>`;
@@ -9321,7 +9323,7 @@ const MainServer={state:'unknown',url:null,name:'',players:0,_t:-1e9,_p:null,
   discover(){
     const M=CONFIG.coop.mainServer;
     return new Promise(res=>{
-      let best=null,done=false,links=[],early=null;
+      let best=null,done=false,links=[],early=null;this.diag={mqtt:0,mqttAll:(CONFIG.coop.mqttUrls||[]).length,ntfy:null};
       const take=a=>{if(a&&a.app==='cpr-server'&&(!best||(a.t||0)>(best.t||0)))best=a;if(best&&!early)early=setTimeout(fin,1200);};
       const fin=()=>{if(done)return;done=true;clearTimeout(T);clearTimeout(early);for(const l of links)l.close();res(best);};
       const T=setTimeout(fin,M.wait*1000);
@@ -9329,9 +9331,9 @@ const MainServer={state:'unknown',url:null,name:'',players:0,_t:-1e9,_p:null,
       const mq=typeof WebSocket!=='undefined'?(CONFIG.coop.mqttUrls||[]):[];let pending=mq.length+(CONFIG.coop.signalUrl?1:0);
       const one=()=>{if(--pending<=0)setTimeout(fin,50);};if(!pending){setTimeout(fin,0);}
       for(const u of mq){let d=false;const once=()=>{if(!d){d=true;one();}};
-        links.push(new MqttLink(u,M.mqttTopic,t=>{try{take(JSON.parse(t));}catch(e){}},ok=>{if(ok)setTimeout(once,1000);else once();}));}
-      if(CONFIG.coop.signalUrl)fetch(CONFIG.coop.signalUrl.replace(/\/?$/,'/')+M.ntfyTopic+'/json?poll=1&since=24h',{cache:'no-store'}).then(r=>r.text()).then(t=>{
-        for(const line of t.split('\n')){try{const d=JSON.parse(line);if(d.event==='message')take(JSON.parse(d.message));}catch(e){}}}).catch(()=>{}).finally(one);
+        links.push(new MqttLink(u,M.mqttTopic,t=>{try{take(JSON.parse(t));}catch(e){}},ok=>{if(ok){this.diag.mqtt++;setTimeout(once,1000);}else once();}));}
+      if(CONFIG.coop.signalUrl)fetch(CONFIG.coop.signalUrl.replace(/\/?$/,'/')+M.ntfyTopic+'/json?poll=1&since=24h',{cache:'no-store'}).then(r=>{this.diag.ntfy=r.ok;return r.text();}).then(t=>{
+        for(const line of t.split('\n')){try{const d=JSON.parse(line);if(d.event==='message')take(JSON.parse(d.message));}catch(e){}}}).catch(()=>{this.diag.ntfy=false;}).finally(one);
     });
   },
   ping(url){
