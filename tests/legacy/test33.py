@@ -51,6 +51,14 @@ try:
     B.tap('#btnStart');B.wait_for_timeout(2500)
     check(B.evaluate("Net.isGuest()&&Game.state==='play'"),'гість у грі через сервер')
     check(A.evaluate("Net.remotes.length")==1,'хост бачить гостя')
+    # сервер оголосив дві адреси (два тунелі), перша на цьому пристрої не працює — гра бере другу
+    import json as _j0,urllib.request as _u0
+    _u0.urlopen(_u0.Request(f'http://127.0.0.1:{NP}/catpibble-rpg-v1-main-server',data=_j0.dumps({'app':'cpr-server','url':'http://127.0.0.1:9','urls':['http://127.0.0.1:9',SURL],'online':True,'name':'Два тунелі','t':int(time.time())+2}).encode(),method='POST')).read()
+    A.evaluate("MainServer.check(true)");A.wait_for_timeout(200)
+    for i in range(40):
+        if A.evaluate("MainServer.state") in ('online','blocked','offline') and not A.evaluate("!!MainServer._p"):break
+        A.wait_for_timeout(200)
+    check(A.evaluate("MainServer.state")=='online' and A.evaluate("MainServer.url")==SURL,'з двох адрес гра обрала робочу')
     # хост, який не бачить сервера (кімната лише напряму), — гість із сервером усе одно підключається напряму
     H=b.new_context().new_page();G=b.new_context().new_page()
     for pg,n in [(H,'H'),(G,'G')]:pg.on('pageerror',lambda e,n=n: errs.append(n+': '+str(e)))

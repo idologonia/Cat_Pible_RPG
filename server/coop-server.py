@@ -9,7 +9,7 @@
          python coop-server.py               лише локально, http://localhost:8787
 Параметри: --port 8787  --name "Сервер Ігоря"
 """
-import argparse, asyncio, base64, hashlib, json, os, pathlib, platform, re, socket, struct, subprocess, sys, threading, time, urllib.parse, urllib.request
+import argparse, asyncio, shutil, base64, hashlib, json, os, pathlib, platform, re, socket, struct, subprocess, sys, threading, time, urllib.parse, urllib.request
 
 ap = argparse.ArgumentParser(description='Сервер кооперативу CAT & PIBBLE RPG')
 ap.add_argument('port_pos', nargs='?', type=int, help=argparse.SUPPRESS)
@@ -167,8 +167,8 @@ def mqtt_publish(hostport, payload, retain=True):
         so.sendall(pkt(0x31 if retain else 0x30, mstr(TOPIC_MQTT.encode()) + payload))
         so.sendall(bytes([0xE0, 0]))
 
-def announce(url, online=True):
-    data = json.dumps({'app': 'cpr-server', 'url': url, 'online': online, 'name': ARGS.name, 't': int(time.time())}, ensure_ascii=False).encode()
+def announce(url, online=True, urls=None):
+    data = json.dumps({'app': 'cpr-server', 'url': url, 'urls': urls or ([url] if online else []), 'online': online, 'name': ARGS.name, 't': int(time.time())}, ensure_ascii=False).encode()
     ok = 0
     for b in [x.strip() for x in ARGS.brokers.split(',') if x.strip()]:
         try: mqtt_publish(b, data); ok += 1
@@ -191,21 +191,7 @@ def cloudflared_path():
     if sysname != 'Windows': exe.chmod(0o755)
     return exe
 
-def start_tunnel(on_url):
-    exe = cloudflared_path()
-    if not exe: return None
-    proc = subprocess.Popen([str(exe), 'tunnel', '--no-autoupdate', '--protocol', 'http2', '--url', f'http://localhost:{PORT}'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
-    def reader():
-        found = False
-        for line in proc.stdout:
-            m = re.search(r'https://[-a-z0-9]+\.trycloudflare\.com', line)
-            if m and not found:
-                found = True; on_url(m.group(0))
-        print('Тунель зупинився.', flush=True)
-    threading.Thread(target=reader, daemon=True).start()
-    return proc
-
-PUBLIC = {'url': None}
+PUBLIC = {'url': None, 'urls': {}}
 def http_ok(url):
     try:
         req = urllib.request.Request(url.rstrip('/') + '/health', headers={'User-Agent': 'catpibble-rpg-server'})
@@ -214,43 +200,95 @@ def http_ok(url):
         return False
 
 def go_public(url):
-    """Оголосити адресу (без перевірки тунелю — для тестів із --announce-url)."""
-    PUBLIC['url'] = url
+    """Оголосити одну адресу без перевірки тунелю (для тестів із --announce-url)."""
+    PUBLIC['url'] = url; PUBLIC['urls'] = {'test': url}
     n = announce(url)
     print(f'\n  СЕРВЕР ОНЛАЙН: {url}', flush=True)
     print(f'  Гравці бачать його автоматично (оголошено, сервісів: {n}). Не закривай це вікно.\n' if n else '  Увага: не вдалося оголосити адресу — перевір інтернет.\n', flush=True)
 
-TUN = {'proc': None}
-def tunnel_supervisor():
-    """Відкриває тунель, перевіряє, що він справді працює з інтернету, оголошує адресу,
-    а далі раз на хвилину перевіряє; якщо тунель обірвався — перезапускає його й оголошує нову адресу."""
+ANN_LOCK = threading.Lock()
+def announce_all(quiet=False):
+    """Оголосити всі робочі адреси (перша — Cloudflare, якщо є). Гра обере ту, до якої достукується."""
+    with ANN_LOCK:
+        urls = [u for k, u in sorted(PUBLIC['urls'].items()) if u]
+        if not urls:
+            if PUBLIC['url']: announce(PUBLIC['url'], online=False)
+            PUBLIC['url'] = None; return
+        PUBLIC['url'] = PUBLIC['urls'].get('cf') or urls[0]
+        n = announce(PUBLIC['url'], urls=urls)
+        if not quiet:
+            print('\n  СЕРВЕР ОНЛАЙН:', flush=True)
+            for u in urls: print('   ', u, flush=True)
+            print(f'  Гравці бачать його автоматично (оголошено, сервісів: {n}). Не закривай це вікно.\n' if n else '  Увага: не вдалося оголосити адресу — перевір інтернет.\n', flush=True)
+
+def start_proc(cmd, rx, on_url):
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, encoding='utf-8', errors='replace')
+    except Exception:
+        return None
+    def reader():
+        found = False
+        for line in proc.stdout:
+            m = re.search(rx, line)
+            if m and not found:
+                found = True; on_url(m.group(0))
+    threading.Thread(target=reader, daemon=True).start()
+    return proc
+
+def cf_cmd():
+    exe = cloudflared_path()
+    return [str(exe), 'tunnel', '--no-autoupdate', '--protocol', 'http2', '--url', f'http://localhost:{PORT}'] if exe else None
+
+def lhr_cmd():
+    ssh = shutil.which('ssh')
+    if not ssh: return None
+    return [ssh, '-o', 'StrictHostKeyChecking=no', '-o', 'UserKnownHostsFile=' + os.devnull, '-o', 'ServerAliveInterval=30',
+            '-o', 'ExitOnForwardFailure=yes', '-R', f'80:localhost:{PORT}', 'nokey@localhost.run']
+
+TUNNELS = {'cf': ('Cloudflare', cf_cmd, r'https://[-a-z0-9]+\.trycloudflare\.com'),
+           'lhr': ('localhost.run', lhr_cmd, r'https://[-a-z0-9]+\.lhr\.life')}
+PROCS = {}
+
+def tunnel_supervisor(key):
+    """Відкриває тунель, перевіряє, що його видно з інтернету, додає адресу до оголошення;
+    раз на хвилину перевіряє і, якщо тунель обірвався, перезапускає його."""
+    name, make_cmd, rx = TUNNELS[key]
+    fails_start = 0
     while True:
+        cmd = make_cmd()
+        if not cmd:
+            print(f'{name}: недоступний на цьому ПК — пропускаю.', flush=True); return
         found, box = threading.Event(), {}
-        proc = start_tunnel(lambda u: (box.__setitem__('url', u), found.set()))
-        TUN['proc'] = proc
-        if not proc: return
-        if not found.wait(90):
-            print('Тунель не відкрився. Пробую ще раз...', flush=True); proc.terminate(); time.sleep(5); continue
-        url = box['url']
-        print('Перевіряю, чи сервер видно з інтернету...', flush=True)
-        ok = False
+        proc = start_proc(cmd, rx, lambda u: (box.__setitem__('url', u), found.set()))
+        PROCS[key] = proc
+        if not proc or not found.wait(90):
+            if proc:
+                try: proc.terminate()
+                except Exception: pass
+            fails_start += 1
+            if fails_start >= 3:
+                print(f'{name}: не вдалося відкрити тунель — працюю без нього.', flush=True); return
+            time.sleep(10); continue
+        url = box['url']; ok = False
         for _ in range(30):
             if http_ok(url): ok = True; break
             time.sleep(3)
         if not ok:
-            print('Тунель не відповідає. Перезапускаю...', flush=True); proc.terminate(); time.sleep(3); continue
-        go_public(url)
-        fails, since_announce = 0, 0
+            print(f'{name}: тунель не відповідає, перезапускаю...', flush=True)
+            proc.terminate(); time.sleep(3); continue
+        fails_start = 0
+        PUBLIC['urls'][key] = url; announce_all()
+        fails, since = 0, 0
         while proc.poll() is None:
-            time.sleep(60); since_announce += 60
+            time.sleep(60); since += 60
             if http_ok(url):
                 fails = 0
-                if since_announce >= 600: announce(url); since_announce = 0
+                if since >= 600: announce_all(quiet=True); since = 0
             else:
                 fails += 1
                 if fails >= 2: break
-        print('Тунель обірвався. Перезапускаю й оголошую нову адресу...', flush=True)
-        announce(url, online=False); PUBLIC['url'] = None
+        print(f'{name}: тунель обірвався, перезапускаю...', flush=True)
+        PUBLIC['urls'].pop(key, None); announce_all(quiet=True)
         try: proc.terminate()
         except Exception: pass
         time.sleep(3)
@@ -263,7 +301,7 @@ async def main():
         threading.Thread(target=go_public, args=(ARGS.announce_url,), daemon=True).start()
     elif ARGS.public:
         print('Відкриваю тунель в інтернет...', flush=True)
-        threading.Thread(target=tunnel_supervisor, daemon=True).start()
+        for key in TUNNELS: threading.Thread(target=tunnel_supervisor, args=(key,), daemon=True).start()
     else:
         print('Лише локально. Щоб сервер бачили всі гравці — запусти з --public (або start-server.bat).', flush=True)
     try:
@@ -273,8 +311,8 @@ async def main():
         if PUBLIC['url']:
             print('Повідомляю гравцям, що сервер офлайн...', flush=True)
             announce(PUBLIC['url'], online=False); PUBLIC['url'] = None
-        if TUN['proc']:
-            try: TUN['proc'].terminate()
+        for pr in PROCS.values():
+            try: pr and pr.terminate()
             except Exception: pass
 
 if __name__ == '__main__':

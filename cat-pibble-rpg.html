@@ -9302,15 +9302,18 @@ function installWeaponAnimHooks(){
    зберігається на брокері) і ntfy. Гра сама знаходить адресу, перевіряє /health і показує, чи сервер онлайн.
    Поки сервер онлайн, кімнати йдуть через нього (працює між будь-якими мережами й країнами); інакше — напряму. */
 const MainServer={state:'unknown',url:null,name:'',players:0,_t:-1e9,_p:null,
-  okUrl(u){return typeof u==='string'&&(u===window.CPR_SERVER||/^https:\/\/[-a-z0-9]+\.trycloudflare\.com\/?$/i.test(u)||(CONFIG.coop.mainServer.allowAny&&/^https?:\/\/\S+$/.test(u)));},
+  okUrl(u){return typeof u==='string'&&(u===window.CPR_SERVER||/^https:\/\/[-a-z0-9]+\.(trycloudflare\.com|lhr\.life)\/?$/i.test(u)||(CONFIG.coop.mainServer.allowAny&&/^https?:\/\/\S+$/.test(u)));},
   check(force){
     if(this._p)return this._p;
     if(!force&&performance.now()-this._t<CONFIG.coop.mainServer.every*1000)return Promise.resolve(this.state);
     if(this.state==='unknown')this.state='checking';
     this._p=(async()=>{
       try{const a=window.CPR_SERVER?{app:'cpr-server',online:true,url:window.CPR_SERVER,name:''}:await this.discover();
-        if(!a||!a.online||!this.okUrl(a.url)){this.state='offline';this.url=null;}
-        else{let h=await this.ping(a.url);if(!h){await new Promise(r=>setTimeout(r,1500));h=await this.ping(a.url);}
+        const cands=a&&a.online?(Array.isArray(a.urls)&&a.urls.length?a.urls:[a.url]).filter(u=>this.okUrl(u)):[];
+        if(!cands.length){this.state='offline';this.url=null;}
+        else{let h=null,good=null;
+          for(let tr=0;tr<2&&!h;tr++){if(tr)await new Promise(r=>setTimeout(r,1500));const rs=await Promise.all(cands.map(u=>this.ping(u)));const i=rs.findIndex(Boolean);if(i>=0){h=rs[i];good=cands[i];}}
+          a.url=good||cands[0];
           const fresh=!window.CPR_SERVER&&Date.now()/1000-(a.t||0)<CONFIG.coop.mainServer.fresh;this.state=h?'online':fresh?'blocked':'offline';this.blockedUrl=h?null:a.url;this.url=h?a.url.replace(/\/+$/,''):null;this.name=a.name||'';this.players=h&&h.players||0;}}
       catch(e){this.state='offline';this.url=null;}
       finally{this._t=performance.now();this._p=null;
