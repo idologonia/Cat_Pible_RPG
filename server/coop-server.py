@@ -194,7 +194,7 @@ def cloudflared_path():
 def start_tunnel(on_url):
     exe = cloudflared_path()
     if not exe: return None
-    proc = subprocess.Popen([str(exe), 'tunnel', '--no-autoupdate', '--url', f'http://localhost:{PORT}'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
+    proc = subprocess.Popen([str(exe), 'tunnel', '--no-autoupdate', '--protocol', 'http2', '--url', f'http://localhost:{PORT}'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
     def reader():
         found = False
         for line in proc.stdout:
@@ -206,27 +206,64 @@ def start_tunnel(on_url):
     return proc
 
 PUBLIC = {'url': None}
+def http_ok(url):
+    try:
+        req = urllib.request.Request(url.rstrip('/') + '/health', headers={'User-Agent': 'catpibble-rpg-server'})
+        return urllib.request.urlopen(req, timeout=10).status == 200
+    except Exception:
+        return False
+
 def go_public(url):
+    """Оголосити адресу (без перевірки тунелю — для тестів із --announce-url)."""
     PUBLIC['url'] = url
-    time.sleep(3)  # даємо тунелю прогрітися
     n = announce(url)
     print(f'\n  СЕРВЕР ОНЛАЙН: {url}', flush=True)
     print(f'  Гравці бачать його автоматично (оголошено, сервісів: {n}). Не закривай це вікно.\n' if n else '  Увага: не вдалося оголосити адресу — перевір інтернет.\n', flush=True)
-    def keep():
-        while PUBLIC['url'] == url:
-            time.sleep(600); announce(url)
-    threading.Thread(target=keep, daemon=True).start()
+
+TUN = {'proc': None}
+def tunnel_supervisor():
+    """Відкриває тунель, перевіряє, що він справді працює з інтернету, оголошує адресу,
+    а далі раз на хвилину перевіряє; якщо тунель обірвався — перезапускає його й оголошує нову адресу."""
+    while True:
+        found, box = threading.Event(), {}
+        proc = start_tunnel(lambda u: (box.__setitem__('url', u), found.set()))
+        TUN['proc'] = proc
+        if not proc: return
+        if not found.wait(90):
+            print('Тунель не відкрився. Пробую ще раз...', flush=True); proc.terminate(); time.sleep(5); continue
+        url = box['url']
+        print('Перевіряю, чи сервер видно з інтернету...', flush=True)
+        ok = False
+        for _ in range(30):
+            if http_ok(url): ok = True; break
+            time.sleep(3)
+        if not ok:
+            print('Тунель не відповідає. Перезапускаю...', flush=True); proc.terminate(); time.sleep(3); continue
+        go_public(url)
+        fails, since_announce = 0, 0
+        while proc.poll() is None:
+            time.sleep(60); since_announce += 60
+            if http_ok(url):
+                fails = 0
+                if since_announce >= 600: announce(url); since_announce = 0
+            else:
+                fails += 1
+                if fails >= 2: break
+        print('Тунель обірвався. Перезапускаю й оголошую нову адресу...', flush=True)
+        announce(url, online=False); PUBLIC['url'] = None
+        try: proc.terminate()
+        except Exception: pass
+        time.sleep(3)
 
 async def main():
     srv = await asyncio.start_server(handle, '127.0.0.1', PORT)   # лише цей ПК: назовні — через тунель (без запиту брандмауера)
     print(f'Сервер кооперативу працює: http://localhost:{PORT}', flush=True)
     if not GAME: print('Увага: не знайдено cat-pibble-rpg.html — гра з сервера не відкриється, але пересилання працює.', flush=True)
-    tunnel = None
     if ARGS.announce_url:
         threading.Thread(target=go_public, args=(ARGS.announce_url,), daemon=True).start()
     elif ARGS.public:
         print('Відкриваю тунель в інтернет...', flush=True)
-        tunnel = start_tunnel(lambda u: threading.Thread(target=go_public, args=(u,), daemon=True).start())
+        threading.Thread(target=tunnel_supervisor, daemon=True).start()
     else:
         print('Лише локально. Щоб сервер бачили всі гравці — запусти з --public (або start-server.bat).', flush=True)
     try:
@@ -236,7 +273,9 @@ async def main():
         if PUBLIC['url']:
             print('Повідомляю гравцям, що сервер офлайн...', flush=True)
             announce(PUBLIC['url'], online=False); PUBLIC['url'] = None
-        if tunnel: tunnel.terminate()
+        if TUN['proc']:
+            try: TUN['proc'].terminate()
+            except Exception: pass
 
 if __name__ == '__main__':
     try:

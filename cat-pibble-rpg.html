@@ -8512,7 +8512,7 @@ const Signal={es:null,topic:null,mq:[],seen:new Set(),on:null,state:null,up:{},
 };
 /* Власний сервер (server/coop-server.py на ПК гравця): усі повідомлення йдуть через нього по WebSocket.
    Адресу задають у вікні кооперативу; якщо гру відкрито із самого сервера — вона підставляється сама. */
-function coopServerBase(){return String(window.CPR_SERVER||Store.get('cpr_coopServer')||'').trim();}
+function coopServerBase(){return String(window.CPR_SERVER||'').trim();}
 function coopServerWs(base,room,id){let u=base.trim().replace(/\/+$/,'');
   if(!/^[a-z]+:\/\//i.test(u))u=(/^(localhost|127\.|10\.|192\.168\.)/.test(u)?'http://':'https://')+u;
   u=u.replace(/^http/i,'ws');return `${u}/ws?room=${encodeURIComponent(room)}&id=${encodeURIComponent(id)}`;}
@@ -8739,7 +8739,7 @@ const Net={
       this.send({k:'hello',name});return;
     }
     const base=coopServerBase();
-    if(base){this._viaMain=!window.CPR_SERVER&&!Store.get('cpr_coopServer');this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='srv';this.msg('Підключаюсь…');if(!this.openServer(base,this.pid)){this.reset();this.msg('Неправильна адреса сервера.');}return;}
+    if(base){this._viaMain=!window.CPR_SERVER;this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='srv';this.msg('Підключаюсь…');if(!this.openServer(base,this.pid)){this.reset();this.msg('Неправильна адреса сервера.');}return;}
     if(typeof RTCPeerConnection==='undefined'){this.reset();this.msg('Цей браузер не підтримує гру через інтернет.');return;}
     this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='net';this.msg('Шукаю кімнату…');
     let tries=0;const knock=()=>{if(!this.isGuest()||this.pcs.host||tries>=CONFIG.coop.helloRetry)return;tries++;Signal.pub({t:'hello',from:this.pid});setTimeout(knock,3000);};
@@ -9023,7 +9023,7 @@ const Net={
         <div class="coopRow"><button class="btn" id="btnCoopJoin">Приєднатися</button></div>
         <div class="coopMsg" id="coopMsg"></div>`;
       $('coopName').value=Store.get('cpr_coopName')||'';
-      $('btnCoopJoin').onclick=async()=>{if(!window.CPR_SERVER&&!Store.get('cpr_coopServer')){this.msg('Перевіряю сервер гри…');await MainServer.check(false);}this.join($('coopName').value,$('coopCodeIn').value,'net');};
+      $('btnCoopJoin').onclick=async()=>{this.msg('Перевіряю сервер гри…');await MainServer.check(false);this.join($('coopName').value,$('coopCodeIn').value,'net');};
       $('coopCodeIn').onkeydown=e=>{e.stopPropagation();if(e.key==='Enter')$('btnCoopJoin').click();};
       $('coopName').onkeydown=e=>e.stopPropagation();
     }
@@ -9274,13 +9274,13 @@ function installWeaponAnimHooks(){
    зберігається на брокері) і ntfy. Гра сама знаходить адресу, перевіряє /health і показує, чи сервер онлайн.
    Поки сервер онлайн, кімнати йдуть через нього (працює між будь-якими мережами й країнами); інакше — напряму. */
 const MainServer={state:'unknown',url:null,name:'',players:0,_t:-1e9,_p:null,
-  okUrl(u){return typeof u==='string'&&(/^https:\/\/[-a-z0-9]+\.trycloudflare\.com\/?$/i.test(u)||(CONFIG.coop.mainServer.allowAny&&/^https?:\/\/\S+$/.test(u)));},
+  okUrl(u){return typeof u==='string'&&(u===window.CPR_SERVER||/^https:\/\/[-a-z0-9]+\.trycloudflare\.com\/?$/i.test(u)||(CONFIG.coop.mainServer.allowAny&&/^https?:\/\/\S+$/.test(u)));},
   check(force){
     if(this._p)return this._p;
     if(!force&&performance.now()-this._t<CONFIG.coop.mainServer.every*1000)return Promise.resolve(this.state);
     if(this.state==='unknown')this.state='checking';
     this._p=(async()=>{
-      try{const a=await this.discover();
+      try{const a=window.CPR_SERVER?{app:'cpr-server',online:true,url:window.CPR_SERVER,name:''}:await this.discover();
         if(!a||!a.online||!this.okUrl(a.url)){this.state='offline';this.url=null;}
         else{const h=await this.ping(a.url);this.state=h?'online':'offline';this.url=h?a.url.replace(/\/+$/,''):null;this.name=a.name||'';this.players=h&&h.players||0;}}
       catch(e){this.state='offline';this.url=null;}
@@ -9313,14 +9313,14 @@ const MainServer={state:'unknown',url:null,name:'',players:0,_t:-1e9,_p:null,
   },
   statusHtml(){
     const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-    if(window.CPR_SERVER||Store.get('cpr_coopServer'))return `<div class="coopSrv on">🟢 Сервер гри онлайн</div>`;
     if(this.state==='online')return `<div class="coopSrv on">🟢 Сервер гри онлайн${this.name&&this.name!=='Сервер гри'?' — '+esc(this.name):''}</div>`;
     if(this.state==='offline')return `<div class="coopSrv off">🔴 Сервер гри офлайн</div>`;
     return `<div class="coopSrv wait">⏳ Перевіряю сервер гри…</div>`;
   },
 };
-{const f=coopServerBase;coopServerBase=function(){return f()||(MainServer.state==='online'&&MainServer.url)||'';};}
+{const f=coopServerBase;coopServerBase=function(){return (MainServer.state==='online'&&MainServer.url)||f()||'';};}
 function installMainServerHooks(){
+  if(Store.get('cpr_coopServer'))Store.set('cpr_coopServer','');
   {const f=Net.openPanel;Net.openPanel=function(){f.call(this);MainServer.check(false);};}
   setInterval(()=>{if(!$('coop').classList.contains('hidden'))MainServer.check(false);},3000);
 }

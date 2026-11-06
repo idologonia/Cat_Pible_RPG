@@ -20,7 +20,7 @@ try:
     A.goto(GAME);A.wait_for_timeout(400);A.click('#btnNew');A.click('#btnSkip');A.click('#btnStart');A.wait_for_timeout(800)
     A.evaluate("Game.changeLocation('outskirts',{x:40,y:40})");A.wait_for_timeout(1200);A.evaluate("setInterval(()=>{Game.hero.iframe=99},100)")
     A.keyboard.press('Escape');A.click('#btnCoop2');A.wait_for_timeout(200)
-    A.evaluate(f"Store.set('cpr_coopServer','{URL}')");A.click('#btnCoopHost');A.wait_for_timeout(800)
+    A.evaluate(f"window.CPR_SERVER='{URL}'");A.click('#btnCoopHost');A.wait_for_timeout(800)
     code=A.evaluate("Net.room");print('room',code)
     check(A.evaluate("Net.srvOk"),'хост підключився до сервера')
     A.screenshot(path=SHOTS+'srv_host_panel.png');A.click('#btnCloseCoop');A.keyboard.press('Escape')
