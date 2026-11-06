@@ -28,7 +28,7 @@
 | `ЗБЕРЕЖЕННЯ` | `SaveSys` (localStorage `cpr_save_N`, `serialize`, `migrate`), `requestAutosave(why)` |
 | `КВЕСТИ` | `QUESTS`, `Quests` (`emit`, `advance`, `step`, `target`, `state`) |
 | далі | дерева навичок, місто (коваль, алхімія, сховище, дошка), зв'язки локацій і світова мапа (`LINKS`, `WORLD_NODES`, `TRAVEL_POINTS`, `nextHop`) |
-| `ЕТАП 12 … ЕТАП 28` | кожен пізній етап — окремим блоком (див. `docs/CHANGELOG.md`) |
+| `ЕТАП 12 … ЕТАП 28` (+ переписаний `Net`, етап 29) | кожен пізній етап — окремим блоком (див. `docs/CHANGELOG.md`) |
 | `ЗВУК І МУЗИКА` | `AudioSys` (Web Audio-синтез), `MUSIC`, `SFX`, `trackFor(loc)` |
 | `10. ГРА` | `const Game = {…}`: `init`, `loadLocation`, `changeLocation`, головний цикл, бій, смерть |
 
@@ -53,14 +53,12 @@
 - Третій шлях — власний сервер `server/coop-server.py` (лише стандартна бібліотека Python): WebSocket `/ws?room=КОД&id=…`, пересилає за полем `to`, роздає гру з `window.CPR_SERVER`. У грі — поле «Сервер» (`coopServerBase()`, `Net.openServer`); канал `kind:'srv'`.
 - Сервер гри (етап 28): `server/start-server.bat` → `coop-server.py --public` (тунель cloudflared, оголошення `{app:'cpr-server',url,online,name,t}` у MQTT-тему `CONFIG.coop.mainServer.mqttTopic` зі збереженням і в ntfy). У грі `MainServer.check()` знаходить адресу, перевіряє `/health`, `statusHtml()` — рядок стану у вікні «Кооператив»; `coopServerBase()` повертає адресу сервера гри, коли він онлайн. Приймаються лише адреси `*.trycloudflare.com` (у тестах — `mainServer.allowAny`).
 - Згорнута вкладка: браузер зупиняє `requestAnimationFrame`, тому в кооперативі гру крутить `setInterval`, що надолужує час (`bgStep`, `bgMaxSteps`); про згортання сторони повідомляють одна одну (`vis`), і тоді діє довший тайм-аут `timeoutHidden`.
-- **Хост рахує світ** (вороги, здобич, час, погода, прапорці, завдання). **Кожен гравець рахує свого героя**: `Game.hero` / `heroData` / `derived` завжди означають *свого* героя, тому навички, інвентар і дерево навичок працюють без змін.
-- Інші гравці — `Net.remotes` (`Critter` з `isHero` і `isRemote`). Вороги обирають ціль через `coopTargetHero(e)`; шкода чужому герою — `Net.hurtRemote` (через `Game._aiTarget`), відкидання — `Net.knockRemote`.
-- У гостя вороги — копії (`mirror:true`, `coopMirrorUpdate`), побудовані з опису хоста (`Net.descOf` → `makeCombatant(spawn)`). Удари гостя (`hitTarget` / `dealRaw`) ідуть хосту як `{d, st, kv}` (`Net.reportHit`); вбивства й нагороди вирішує хост (`kill`).
-- Підземелля: хост пересилає насіння (`Net.seeds`), тож коридори однакові.
-- Герої гостей зберігаються в `Game.flags.party[ім'я гравця]` (лише в хоста). Гостю прапорці надсилаються без `party` (`Net.flagsForGuest`).
-- Гість (етап 25, блок `ЕТАП 25: ГОСТІ В МИРНОМУ ЖИТТІ`): розмовляє з мешканцями (пункти `QUEST_TALK` замінено підказкою, крім `kind:'shop'`; повністю — для `COOP_GUEST_TALK_OK`), торгує, коваль, алхімія, сховище, ресурсні вузли (`coopGuestObject`). Нагорода за `Quests.complete` у хоста → `qdone` кожному гостю (`questShare`). Досягнення гостя — у `heroData.coopAch`.
+- **Етап 29: кожен ходить сам.** Хост сесії зберігає світ (прапорці, завдання, герої гостей у `Game.flags.party[ім'я гравця]`), пересилає повідомлення (`to` — одному, `toLoc` — усім на локації, `toAll` — усім) і веде облік «хто де»: `Net.locs` (pid → локація), `Net.auth` (локація → хто її рахує: хто прийшов першим), `Net.seeds` (насіння підземель). Розсилає це повідомленням `locs` (разом із годинником). Гість не зберігає гру сам.
+- **Хто рахує локацію** (`Net.isAuth()`, `!Net._mirror`) — справжні вороги, здобич, події, союзники; надсилає `snap` тим, хто на локації, приймає `hit` / `pick` / `pickI` / `drop` / `dropc` / `need`. Решта (`Net._mirror`) бачать копії (`mirror:true`, `coopMirrorUpdate`); `Net.checkMode()` перемикає `toMirror()` / `toAuth()` (копії стають справжніми ворогами), коли роль переходить. Кожен гравець шле свій стан `st` усім на локації; `Net.remotes` — лише гравці на моїй локації.
+- `Game.hero` / `heroData` / `derived` завжди означають *свого* героя. Вороги обирають ціль через `coopTargetHero(e)`; шкода чужому герою — `Net.hurtRemote`, відкидання — `Net.knockRemote`.
+- **Спільні прапорці й завдання**: гість шле зміни `fpatch` (`coopFlagDiff` — 2 рівні вкладеності, з номером `seq`), хост застосовує (`coopApplyPatch`) і розсилає `flags` з `ack`; гість повторно накладає лише ще не підтверджені зміни (`applyHostFlags`). `Quests.complete` у будь-кого → `qdone` усім (нагорода загону). Досягнення гостя — у `heroData.coopAch`.
+- **Розмова з мешканцем**: `talkTo` займає його (`Net.npcBusy`, повідомлення `talk`), звільняє, коли діалог закрився; `CONFIG.coop.talkLock`.
 - Ефекти (етап 26): нові `Game.vfx`, зони (без `spec`) і `spawnBurst` збираються `coopTakeFx()` і йдуть іншим гравцям (`fx` у знімку хоста й у стані гостя), застосовуються `coopApplyFx()` з позначкою `_n` (щоб не ходили по колу). `follow` не пересилається. Інші гравці на мінікарті — обгортка `Render.drawMinimap`.
-- У гостя вимкнено: збереження, переходи між локаціями, двері / скрині / дошки контрактів, кімнату в корчмі, події в дорозі, набіги, власних союзників, зміни завдань.
 - Тести: `tests/legacy/test27.py` (дві вкладки одного браузера), `tests/legacy/test28.py` (WebRTC між різними профілями; знайомство через локальну імітацію `tests/ntfy_mock.py`), `tests/legacy/test29.py` (через сервер на ПК), `tests/legacy/test30.py` (мирне життя гостя), `tests/legacy/test31.py` (ефекти й мінікарта), `tests/legacy/test32.py` (анімація зброї), `tests/legacy/test33.py` (сервер гри: онлайн/офлайн).
 
 ## Перевірка після кожної зміни
@@ -85,5 +83,5 @@ python tests/run_all.py test22      # лише один тест
 
 ## Документи
 
-- `docs/CHANGELOG.md` — що зроблено в етапах 1–28.
+- `docs/CHANGELOG.md` — що зроблено в етапах 1–29.
 - `docs/IDEAS.md` — ідеї, які обговорювали, і можливі наступні кроки.

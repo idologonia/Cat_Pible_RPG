@@ -767,7 +767,7 @@ body.touch #bossBar{top:72px}body.touch #dungeonTag{top:72px}
     <div class="box panel" style="width:min(520px,100%)">
       <button class="btn small secondary closeX" id="btnCloseCoop">Закрити</button>
       <h2>Кооператив</h2>
-      <div class="invHint" style="text-align:left;margin-bottom:8px">Грайте разом до 4 гравців. Хост створює кімнату у своїй грі — світ, завдання й герої друзів зберігаються в його збереженні. Друзі приєднуються за кодом кімнати. Паузи в кооперативі немає.<br>Коли сервер гри онлайн, гра йде через нього; коли офлайн — напряму між браузерами (між різними країнами чи через мобільний інтернет це може не спрацювати).</div>
+      
       <div id="coopBody"></div>
     </div>
   </div>
@@ -1043,6 +1043,7 @@ const CONFIG = {
      signalUrl, mqttUrls — публічні сервіси для знайомства гравців через інтернет; працюють одночасно, досить будь-якого одного
      (сама гра йде напряму між браузерами, WebRTC);
      iceServers — STUN/TURN-сервери для прямого з'єднання; сюди ж можна додати власний TURN (наприклад, на ПК хоста);
+     talkLock — скільки секунд мешканець «зайнятий» розмовою з іншим гравцем без підтвердження;
      fxPerPacket — скільки візуальних ефектів (кола, удари, спалахи) інших гравців пересилати за раз;
      questShare — яку частку досвіду й золота за завдання загону (його виконує хост) отримує кожен гість;
      mainServer — де гра шукає адресу сервера гри (server/start-server.bat на ПК) і як часто перевіряє, чи він онлайн;
@@ -1050,7 +1051,7 @@ const CONFIG = {
   coop: { maxPlayers:4, sendHz:12, timeout:6, timeoutHidden:180, bgStep:0.05, bgMaxSteps:24, joinWait:4, joinWaitNet:25, helloRetry:3, iceWait:2.5,
     signalUrl:'https://ntfy.sh/', mqttUrls:['wss://broker.hivemq.com:8884/mqtt','wss://broker.emqx.io:8084/mqtt','wss://test.mosquitto.org:8081/mqtt'], iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}],
     mainServer:{ mqttTopic:'catpibble-rpg/v1/main-server', ntfyTopic:'catpibble-rpg-v1-main-server', every:20, wait:4, allowAny:false },
-    xpRadius:22, questShare:1, fxPerPacket:40, enemyHpPerPlayer:0.5, heroSaveEvery:5, flagsEvery:2, lerp:14, spawnSpread:1.2 },
+    xpRadius:22, questShare:1, fxPerPacket:40, talkLock:20, enemyHpPerPlayer:0.5, heroSaveEvery:5, flagsEvery:2, lerp:14, spawnSpread:1.2 },
 };
 
 /* ===================== 2. ДАНІ ===================== */
@@ -4064,7 +4065,7 @@ function updateProjectiles(dt){
       }else{
         const h=Game.hero;
         for(const a of Game.allies||[])if(!a.downed&&Math.hypot(a.x-p.x,a.y-p.y)<a.r+p.r){done=true;allyTakeDamage(a,p.dmg);spawnBurst(p.x,p.y,p.z,'#c9b48a',5,1.2);break;}
-        if(!done&&Net.isHost())for(const r of Net.remotes)if(!r.dead&&Math.hypot(r.x-p.x,r.y-p.y)<r.r+p.r){done=true;p.hitHero=true;Net.hurtRemote(r,p.dmg,p.x-p.dx*2,p.y-p.dy*2,null);spawnBurst(p.x,p.y,p.z,'#c9b48a',5,1.2);break;}
+        if(!done&&Net.role&&!Net._mirror)for(const r of Net.remotes)if(!r.dead&&Math.hypot(r.x-p.x,r.y-p.y)<r.r+p.r){done=true;p.hitHero=true;Net.hurtRemote(r,p.dmg,p.x-p.dx*2,p.y-p.dy*2,null);spawnBurst(p.x,p.y,p.z,'#c9b48a',5,1.2);break;}
         if(!done&&h&&!h.dead&&Math.hypot(h.x-p.x,h.y-p.y)<h.r+p.r){done=true;p.hitHero=true;const res=heroTakeDamage(p.dmg,p.x-p.dx*2,p.y-p.dy*2);if(p.src==='crossbow'&&(res==='dodge'||res==='block'))Quests.emit('evade');spawnBurst(p.x,p.y,p.z,'#c9b48a',5,1.2);}
       }
       if(!done&&p.traveled>=p.range){done=true;projEnd(p,'range');}
@@ -6495,7 +6496,7 @@ function updateHazards(dt){
   for(let i=Game.hazards.length-1;i>=0;i--){const z=Game.hazards[i];z.t+=dt;
     if(z.t>=z.delay){spawnBurst(z.x,z.y,2,'#6b4228',14,2.4);spawnBurst(z.x,z.y,4,'#a8844f',8,1.6);Game.shake=Math.max(Game.shake,2);
       if(h&&!h.dead&&Math.hypot(h.x-z.x,h.y-z.y)<z.r+h.r)heroTakeDamage(z.dmg,z.x,z.y);
-      if(Net.isHost())for(const r of Net.remotes)if(!r.dead&&Math.hypot(r.x-z.x,r.y-z.y)<z.r+r.r)Net.hurtRemote(r,z.dmg,z.x,z.y,null);
+      if(Net.role&&!Net._mirror)for(const r of Net.remotes)if(!r.dead&&Math.hypot(r.x-z.x,r.y-z.y)<z.r+r.r)Net.hurtRemote(r,z.dmg,z.x,z.y,null);
       for(const a of Game.allies||[])if(Math.hypot(a.x-z.x,a.y-z.y)<z.r+a.r)allyTakeDamage(a,z.dmg);Game.hazards.splice(i,1);}}
 }
 
@@ -8525,26 +8526,34 @@ const RTC={
 function projTuple(p,owner){return [+p.x.toFixed(2),+p.y.toFixed(2),+p.dx.toFixed(3),+p.dy.toFixed(3),Math.round(p.z||0),p.kind,p.speed||0,owner];}
 
 const Net={
-  role:null,room:null,pid:null,name:'',key:'',ch:null,
-  peers:{},          // хост: pid → {pid,name,key,last,r,proj}
-  remotes:[],        // герої інших гравців: малюються й стають цілями ворогів
-  ghostAllies:[],ghostProj:[],ghostHaz:[],seeds:{},
-  mirrors:new Map(), // гість: копії ворогів хоста за номером
-  _sendT:0,_flagsT:0,_hdT:0,_nid:0,_flagsJson:'',_hdJson:'',_lookT:0,_lastHost:0,
-  live(){return this.role==='guest'||(this.role==='host'&&this.remotes.length>0);},
+  role:null,room:null,pid:null,name:'',key:'',
+  peers:{},          // хост: pid → {pid,name,key,last,hidden,heroName,level}
+  remotes:[],        // герої інших гравців на моїй локації
+  ghostAllies:[],ghostProj:[],ghostHaz:[],seeds:{},_mySeed:{},_pj:{},
+  locs:{},auth:{},since:{},who:{},   // хто де, хто рахує локацію, хто є хто (для списку гравців)
+  mirrors:new Map(),npcBusy:{},talking:null,_mirror:false,
+  _sendT:0,_flagsT:0,_hdT:0,_nid:0,_flagsJson:'',_hdJson:'',_lookT:0,_lastHost:0,_locsT:0,_base:{},_patchJson:'',
+  live(){return this.role==='guest'||(this.role==='host'&&Object.keys(this.peers).length>0);},
   isHost(){return this.role==='host';},
   isGuest(){return this.role==='guest';},
-  players(){return 1+this.remotes.filter(r=>!r.ghostOnly).length;},
+  myLoc(){return Game.locationId;},
+  /* Чи я рахую свою локацію: так, якщо її ніхто інший не рахує */
+  isAuth(){if(!this.role)return true;const L=this.myLoc(),a=this.auth[L];return !a||a===this.pid||this.locs[a]!==L;},
+  mirrorMode(){return !!this.role&&!!Game.heroData&&this._mirror;},
+  authPid(){return this.auth[this.myLoc()];},
+  others(loc){return Object.keys(this.locs).filter(p=>p!==this.pid&&this.locs[p]===loc);},
+  players(){return 1+this.remotes.length;},   // гравці на моїй локації (сила ворогів)
+  roomSize(){return 1+Object.keys(this.isHost()?this.peers:this.who).filter(p=>p!==this.pid&&p!=='host').length+(this.isGuest()?1:0);},
   /* ---------- Зв'язок ----------
-     Два шляхи: вкладки одного браузера (BroadcastChannel) та інтернет (WebRTC напряму між браузерами,
-     знайомство — через Signal). Решта гри бачить лише канали гравців: links[pid] у хоста, hostLink у гостя. */
+     Три шляхи: інтернет напряму (WebRTC, знайомство через Signal), сервер гри (WebSocket) і вкладки одного браузера
+     (для тестів). Хост пересилає повідомлення між гостями: to — одному гравцю, toLoc — усім на локації, toAll — усім. */
   links:{},hostLink:null,bc:null,pcs:{},sigOk:false,
   open(room){
     if(this.bc){try{this.bc.close();}catch(e){}this.bc=null;}
     try{this.bc=new BroadcastChannel('cpr_coop_'+room);}catch(e){this.bc=null;return false;}
     this.bc.onmessage=ev=>{const m=ev.data;if(!m||(m.to&&m.to!==this.pid))return;
       if(this.isGuest()&&!(this.hostLink&&this.hostLink.kind==='bc'))return;
-      const L=this.isHost()&&!(this.links[m.from]&&this.links[m.from].kind==='rtc')?this.bcLink(m.from):null;
+      const L=this.isHost()&&!(this.links[m.from]&&this.links[m.from].kind!=='bc')?this.bcLink(m.from):null;
       try{this.recv(m,L);}catch(err){console.error(err);}};
     return true;
   },
@@ -8566,24 +8575,36 @@ const Net={
     }catch(e){console.error(e);}
   },
   to(pid,m){m.to=pid;this.send(m);},
+  toPid(pid,m){if(!pid||pid===this.pid)return;if(this.isHost()||pid!=='host')m.to=pid;this.send(m);},
+  toLoc(m){const L=this.myLoc();m.loc=m.loc||L;if(this.isHost()){for(const p of this.others(L))if(this.peers[p])this.to(p,{...m});}else{m.toLoc=L;this.send(m);}},
+  toAll(m){if(this.isHost())this.send(m);else{m.toAll=1;this.send(m);}},
   recv(m,link){
-    if(!m||m.from===this.pid||(m.to&&m.to!==this.pid))return;
-    if(this.isHost()&&link&&m.from&&!this.links[m.from])this.links[m.from]=link;
-    if(this.isHost())this.onHost(m);else if(this.isGuest())this.onGuest(m);
+    if(!m||m.from===this.pid)return;
+    if(this.isHost()){
+      if(link&&m.from&&!this.links[m.from])this.links[m.from]=link;
+      if(m.to&&m.to!=='host'){const L=this.links[m.to];if(L)L.send(m);return;}
+      if(m.toLoc){for(const pid in this.peers)if(pid!==m.from&&this.locs[pid]===m.toLoc){const L=this.links[pid];if(L)L.send({...m,to:pid});}
+        if(m.k!=='st'&&m.toLoc!==this.myLoc())return;}
+      if(m.toAll){for(const pid in this.peers)if(pid!==m.from){const L=this.links[pid];if(L)L.send({...m,to:pid});}}
+      this.onHost(m);
+    }else{
+      if(m.to&&m.to!==this.pid)return;
+      this.onGuest(m);
+    }
   },
-  /* Власний сервер: один WebSocket, сервер пересилає повідомлення за полем to */
+  /* Сервер гри: один WebSocket, сервер пересилає повідомлення за полем to */
   openServer(base,id){
     let ws;try{ws=new WebSocket(coopServerWs(base,this.room,id));}catch(e){return false;}
     this.srv=ws;this.srvOk=false;
     ws.onopen=()=>{if(this.srv!==ws)return;this.srvOk=true;
-      if(this.isGuest()){this.hostLink={kind:'srv',send:m=>{m.to='host';if(ws.readyState===1)ws.send(JSON.stringify(m));},close(){}};this.msg('Сервер на зв’язку. Приєднуюсь…');this.send({k:'hello',name:this.name});}
+      if(this.isGuest()){this.hostLink={kind:'srv',send:m=>{m.to=m.to||'host';if(ws.readyState===1)ws.send(JSON.stringify(m));},close(){}};this.msg('Сервер на зв’язку. Приєднуюсь…');this.send({k:'hello',name:this.name});}
       this.renderPanel();};
     ws.onmessage=ev=>{if(this.srv!==ws)return;let m;try{m=JSON.parse(ev.data);}catch(e){return;}
-      const L=this.isHost()&&m.from?{kind:'srv',send:x=>{x.to=m.from;if(ws.readyState===1)ws.send(JSON.stringify(x));},close(){}}:null;
+      const L=this.isHost()&&m.from?{kind:'srv',send:x=>{x.to=x.to||m.from;if(ws.readyState===1)ws.send(JSON.stringify(x));},close(){}}:null;
       try{this.recv(m,L);}catch(e){console.error(e);}};
     ws.onclose=()=>{if(this.srv!==ws)return;const was=this.srvOk;this.srv=null;this.srvOk=false;
       if(this.isHost()){UI.toast('Зв’язок із сервером гри втрачено. Нові гравці приєднуються напряму.',3);this.renderPanel();}
-      else if(this.isGuest()){if(Game.heroData)this.hostGone('Зв’язок із сервером утрачено.');else if(!was&&this._viaMain){const n=this.name,c=this.room;MainServer.state='offline';MainServer.url=null;this.reset();this.join(n,c,'net');}else{this.reset();this.msg(was?'Сервер закрив з’єднання.':'Не вдалося підключитися до сервера. Перевір адресу і чи він запущений.');}}};
+      else if(this.isGuest()){if(Game.heroData)this.hostGone('Зв’язок із сервером утрачено.');else if(!was&&this._viaMain){const n=this.name,c=this.room;MainServer.state='offline';MainServer.url=null;this.reset();this.join(n,c,'net');}else{this.reset();this.msg(was?'Сервер закрив з’єднання.':'Не вдалося підключитися до сервера.');}}};
     return true;
   },
   /* Хост: гість з інтернету постукав — пропонуємо пряме з'єднання */
@@ -8591,7 +8612,7 @@ const Net={
     if(!this.isHost())return;
     if(m.t==='answer'){const pc=this.pcs[m.from];if(pc&&!pc.currentRemoteDescription){try{await pc.setRemoteDescription({type:'answer',sdp:m.sdp});}catch(e){console.error(e);}}return;}
     if(m.t!=='hello'||!m.from||this.pcs[m.from]||this.links[m.from])return;
-    if(this.players()>=CONFIG.coop.maxPlayers){Signal.pub({t:'full',to:m.from});return;}
+    if(this.roomSize()>=CONFIG.coop.maxPlayers){Signal.pub({t:'full',to:m.from});return;}
     const pid=m.from,pc=new RTCPeerConnection({iceServers:CONFIG.coop.iceServers});this.pcs[pid]=pc;
     const dc=pc.createDataChannel('game');
     const drop=()=>{if(this.peers[pid])this.removePeer(pid,'відключається');delete this.pcs[pid];delete this.links[pid];};
@@ -8608,7 +8629,7 @@ const Net={
     if(!this.isGuest()||m.to!==this.pid)return;
     if(m.t==='full'){this.reset();this.msg('Кімната заповнена (до '+CONFIG.coop.maxPlayers+' гравців).');return;}
     if(m.t!=='offer'||this.pcs.host)return;
-    const pc=new RTCPeerConnection({iceServers:CONFIG.coop.iceServers});this.pcs.host=pc;this.msg('Хост знайшовся. З’єднуюсь напряму…');
+    const pc=new RTCPeerConnection({iceServers:CONFIG.coop.iceServers});this.pcs.host=pc;this.msg('Хост знайшовся. З’єднуюсь…');
     pc.ondatachannel=ev=>{const dc=ev.channel;
       dc.onopen=()=>{this.hostLink=RTC.link(dc,pc);Signal.close();this.msg('З’єднано. Приєднуюсь…');this.send({k:'hello',name:this.name});};
       dc.onmessage=e=>{let d;try{d=JSON.parse(e.data);}catch(err){return;}try{this.recv(d,null);}catch(err){console.error(err);}};
@@ -8617,12 +8638,14 @@ const Net={
       Signal.pub({t:'answer',from:this.pid,sdp:RTC.slim(pc.localDescription.sdp)});}catch(e){console.error(e);this.reset();this.msg('Не вдалося з’єднатися з хостом.');}
   },
   reset(){
+    const wasMirror=this._mirror&&Game.heroData;
     this.closeCh();this.role=null;this.room=null;this.peers={};this.remotes=[];this.ghostAllies=[];this.ghostProj=[];this.ghostHaz=[];
-    this._hostHidden=false;this.mirrors=new Map();this._pending=null;this._creating=false;this._joinT=0;this._seed=null;this._allowLoc=false;this._flagsJson='';this._hdJson='';
+    this.locs={};this.auth={};this.since={};this.who={};this.seeds={};this._pj={};this.npcBusy={};this.talking=null;
+    this._hostHidden=false;this.mirrors=new Map();this._creating=false;this._joinT=0;this._flagsJson='';this._hdJson='';this._base={};this._inflight=[];this._pseq=0;this._acks={};this._mirror=false;
     $('coopTag').classList.add('hidden');
-    if(Game.combatants)this.scaleEnemies();
+    if(Game.combatants){if(wasMirror)Game.combatants=[];this.scaleEnemies();}
   },
-  /* ---------- Хост ---------- */
+  /* ---------- Хост: сесія ---------- */
   hostRoom(){
     if(!Game.heroData||this.role)return;
     this.role='host';this.pid='host';this.room=coopCode();
@@ -8631,55 +8654,62 @@ const Net={
     this.sigOk=typeof RTCPeerConnection!=='undefined'&&Signal.sub(coopTopic(this.room),m=>this.hostSig(m),ok=>{this.sigOk=ok;this.renderPanel();});
     if(!local&&!this.sigOk){this.role=null;UI.toast('Браузер не підтримує кооператив.',3);return;}
     Game.flags.party=Game.flags.party||{};
-    UI.toast(`Кімнату ${this.room} створено. Друзі приєднуються за цим кодом.`,3);
+    this.locs={host:this.myLoc()};this.since={host:performance.now()};this.auth={[this.myLoc()]:'host'};
+    UI.toast(`Кімнату ${this.room} створено.`,2.5);
     this.updateTag();this.renderPanel();
   },
   closeRoom(){if(!this.isHost())return;this.send({k:'end'});this.reset();requestAutosave('coop');this.renderPanel();},
-  peerOf(r){return r&&this.peers[r.pid];},
   addPeer(pid,name,hd){
-    const key=coopKey(name);
-    const r=new Critter({isHero:true,isRemote:true,pid,name:hd.name,player:name,r:CONFIG.hero.radius,look:heroLook(hd),dir:'down',buffs:{},aimW:[1,0],hp:hd.hp,maxHp:1,level:hd.level});
-    const [x,y]=this.spotNear(Game.hero);r.x=r.tx=x;r.y=r.ty=y;
-    this.peers[pid]={pid,name,key,last:performance.now(),r,proj:[]};this.remotes.push(r);
-    this.to(pid,{k:'welcome',hd,room:this.room,hostName:Game.heroData.name,...this.locPayload(x,y)});
+    const key=coopKey(name),hloc=this.myLoc(),L=LOCATIONS[hloc];
+    this.peers[pid]={pid,name,key,last:performance.now(),heroName:hd.name,level:hd.level};
+    const [x,y]=L&&!L.dungeon?this.spotNear(Game.hero):[NaN,NaN];
+    this.to(pid,{...this.locsMsg(),k:'welcome',hd,room:this.room,hostName:Game.heroData.name,loc:hloc,x,y,flags:this.flagsForGuest()});
     UI.toast(`${name} приєднується до гри.`,2.4);this.updateTag();this.renderPanel();requestAutosave('coop');
   },
   removePeer(pid,why){
     const p=this.peers[pid];if(!p)return;delete this.peers[pid];
     const L=this.links[pid];delete this.links[pid];delete this.pcs[pid];if(L)setTimeout(()=>L.close(),300);
-    this.remotes=this.remotes.filter(r=>r!==p.r);
+    this.remotes=this.remotes.filter(r=>r.pid!==pid);delete this.locs[pid];delete this.since[pid];
+    for(const k in this.npcBusy)if(this.npcBusy[k].pid===pid)delete this.npcBusy[k];
+    this.recomputeAuth(true);
     UI.toast(`${p.name} ${why||'виходить із гри'}.`,2.4);this.updateTag();this.renderPanel();requestAutosave('coop');
   },
   spotNear(h){const S=CONFIG.coop.spawnSpread;for(let i=0;i<12;i++){const a=Math.random()*Math.PI*2,x=h.x+Math.cos(a)*S,y=h.y+Math.sin(a)*S;if(!Game.world.collidesTiles(x,y,CONFIG.hero.radius))return [x,y];}return [h.x,h.y];},
   flagsForGuest(){const f={...Game.flags};delete f.party;return coopClone(f)||{};},
-  nidOf(o){return o.nid||(o.nid=++this._nid);},
-  descOf(c){
-    let s=c.spawn?coopClone(c.spawn):(c instanceof Dummy?{type:'dummy',x:c.x,y:c.y,armored:!!c.armored}:null);
-    if(!s)return null;
-    return {nid:this.nidOf(c),s,x:c.x,y:c.y,dead:!!c.dead,hp:c.hp,maxHp:c.maxHp,level:c.level,elite:c.elite||null,name:c.name,look:coopClone(c.look),scale:c.scale,h:c.h,r:c.r,boss:!!c.boss,unique:c.unique||null,armor:c.armor};
+  /* Хто де: локацію рахує той, хто прийшов туди першим; коли він іде — наступний */
+  onEnter(pid,loc,seed){
+    const others=Object.keys(this.locs).some(p=>p!==pid&&this.locs[p]===loc);
+    this.locs[pid]=loc;this.since[pid]=performance.now();
+    if(seed!=null&&!others)this.seeds[loc]=seed;
+    this.recomputeAuth(true);
   },
-  locPayload(x,y){
-    return {loc:Game.locationId,x,y,seed:this.seeds[Game.locationId]??null,cleared:!!Game.world.cleared,flags:this.flagsForGuest(),
-      ents:Game.combatants.map(c=>this.descOf(c)).filter(Boolean)};
+  recomputeAuth(push){
+    const A={};
+    for(const loc of new Set(Object.values(this.locs))){
+      const cur=this.auth[loc];if(cur&&this.locs[cur]===loc){A[loc]=cur;continue;}
+      let best=null;for(const p in this.locs)if(this.locs[p]===loc&&(best==null||this.since[p]<this.since[best]))best=p;A[loc]=best;}
+    this.auth=A;
+    if(push)this.send(this.locsMsg());
   },
-  sendLoc(){
-    for(const pid in this.peers){const p=this.peers[pid],[x,y]=this.spotNear(Game.hero);p.r.x=p.r.tx=x;p.r.y=p.r.ty=y;p.proj=[];this.to(pid,{k:'loc',...this.locPayload(x,y)});}
+  locsMsg(){
+    const who={host:[Game.heroData?Game.heroData.name:'',Game.heroData?Game.heroData.level:1,this.locs.host]};
+    for(const p in this.peers){const q=this.peers[p];who[p]=[q.heroName||q.name,q.level||1,this.locs[p]];}
+    return {k:'locs',locs:{...this.locs},auth:{...this.auth},seeds:{...this.seeds},who,clock:Game.flags?Game.flags.clock:null,hostName:Game.heroData&&Game.heroData.name};
   },
   onHost(m){
     const p=this.peers[m.from];if(p)p.last=performance.now();
     switch(m.k){
       case 'hello':{
         const key=coopKey(m.name);if(!key){this.to(m.from,{k:'nope',msg:'Вкажи ім’я гравця.'});return;}
-        if(this.players()>=CONFIG.coop.maxPlayers){this.to(m.from,{k:'nope',msg:'Кімната заповнена (до '+CONFIG.coop.maxPlayers+' гравців).'});return;}
+        if(this.roomSize()>=CONFIG.coop.maxPlayers){this.to(m.from,{k:'nope',msg:'Кімната заповнена (до '+CONFIG.coop.maxPlayers+' гравців).'});return;}
         if(Object.values(this.peers).some(q=>q.key===key)){this.to(m.from,{k:'nope',msg:'Гравець із таким ім’ям уже в кімнаті.'});return;}
-        if(Game.state==='dead'||Game._traveling){this.to(m.from,{k:'nope',msg:'Хост зараз у дорозі або загинув. Спробуй за кілька секунд.'});return;}
         const P=Game.flags.party||(Game.flags.party={}),saved=P[key];
         if(saved&&saved.hd)this.addPeer(m.from,m.name,saved.hd);else this.to(m.from,{k:'newHero'});
         return;}
       case 'join':{
         const key=coopKey(m.name),hd=m.hd;
         if(!key||!hd||!CLASSES[hd.cls]||!RACES[hd.race]){this.to(m.from,{k:'nope',msg:'Не вдалося створити героя.'});return;}
-        if(this.players()>=CONFIG.coop.maxPlayers){this.to(m.from,{k:'nope',msg:'Кімната заповнена.'});return;}
+        if(this.roomSize()>=CONFIG.coop.maxPlayers){this.to(m.from,{k:'nope',msg:'Кімната заповнена.'});return;}
         (Game.flags.party||(Game.flags.party={}))[key]={name:m.name,hd};
         this.addPeer(m.from,m.name,hd);return;}
       case 'bye':if(p){if(m.hd)this.storeHd(p,m.hd);this.removePeer(m.from);}return;
@@ -8687,56 +8717,15 @@ const Net={
     }
     if(!p)return;
     switch(m.k){
-      case 'st':{const r=p.r;if(m.fx&&m.fx.length){coopApplyFx(m.fx);(this._relay||(this._relay=[])).push(...m.fx.map(f=>[m.from,f]));}this.applyHero(r,m.h,dtNow());if(m.lk)r.look=m.lk;r.name=m.nm||r.name;p.proj=m.pj||[];return;}
       case 'hd':this.storeHd(p,m.hd);return;
-      case 'hit':this.applyHit(m);return;
-      case 'pick':{const i=Game.coins.findIndex(c=>c.nid===m.id);if(i<0)return;const c=Game.coins[i];Game.coins.splice(i,1);this.to(m.from,{k:'gold',a:c.amount});return;}
-      case 'pickI':{const i=Game.groundItems.findIndex(g=>g.nid===m.id);if(i<0)return;const g=Game.groundItems[i];Game.groundItems.splice(i,1);this.to(m.from,{k:'item',it:g.it});return;}
-      case 'drop':if(m.it&&ITEM_BASES[m.it.base])dropItem(m.x,m.y,m.it);return;
-      case 'need':{const L=Game.combatants.filter(c=>m.ids.includes(c.nid)).map(c=>this.descOf(c)).filter(Boolean);this.to(m.from,{k:'ents',ents:L});return;}
+      case 'enter':this.onEnter(m.from,m.loc,m.seed);this.renderPanel();return;
+      case 'fpatch':coopApplyPatch(Game.flags,m.p||[]);(this._acks||(this._acks={}))[m.from]=m.seq||0;coopFlagsChanged();return;
+      case 'st':p.heroName=m.nm||p.heroName;p.level=m.h?m.h[13]:p.level;if(m.loc&&this.locs[m.from]!==m.loc)this.onEnter(m.from,m.loc,null);break;
     }
+    this.onAny(m);
   },
-  storeHd(p,hd){if(!hd||!CLASSES[hd.cls])return;const P=Game.flags.party||(Game.flags.party={});P[p.key]={name:p.name,hd};p.r.look=heroLook(hd);},
-  applyHit(m){
-    const e=Game.combatants.find(c=>c.nid===m.id);if(!e||e.dead)return;
-    e.hp-=m.d;e.hurtT=0.14;e.lastHitT=0;
-    if(m.d>0)floatText(e.x,e.y,30,Math.round(m.d),'#ffffff',false,0.9);
-    if(m.st)for(const k in m.st){const v=m.st[k];if(COOP_DUR.includes(k))e.st[k]=Math.max(e.st[k]||0,v);else e.st[k]=v;}
-    if(m.kv&&!e.fixed){e.vx=(e.vx||0)+m.kv[0];e.vy=(e.vy||0)+m.kv[1];}else if(e.fixed&&m.d>0)e.wobble=Math.max(e.wobble||0,0.2);
-    if(e.hp<=0){e.hp=0;e.onKill();}else if(e.onHurt)e.onHurt();
-  },
-  hurtRemote(r,amount,fx,fy,src){
-    const p=this.peerOf(r);if(!p||r.dead)return null;
-    this.to(p.pid,{k:'dmg',a:amount,fx,fy,el:src&&src.elite?src.elite:null});
-    if(src&&src.elite&&src.elite.includes('vamp')&&!src.dead){const a=Math.round(amount*0.6);src.hp=Math.min(src.maxHp,src.hp+a);floatText(src.x,src.y,src.h,'+'+a,'#ff6a8a',false,0.8);}
-    r.hurtT=0.22;return 'hit';
-  },
-  knockRemote(r,dx,dy,power){const p=this.peerOf(r);if(p)this.to(p.pid,{k:'knock',dx,dy,p:power});},
-  /* Здоров'я ворогів росте з кількістю гравців */
-  scaleEnemies(){
-    const mult=this.isHost()?1+CONFIG.coop.enemyHpPerPlayer*(this.players()-1):1;
-    for(const c of Game.combatants||[]){if(!c.isEnemy||c.dead||c.mirror)continue;
-      if(c._sm!==c.maxHp)c._cm=1;
-      const cm=c._cm||1;if(cm===mult)continue;
-      const k=mult/cm;c.maxHp=Math.max(1,Math.round(c.maxHp*k));c.hp=clamp(Math.round(c.hp*k),1,c.maxHp);c._cm=mult;c._sm=c.maxHp;}
-  },
-  snapshot(){
-    const G=Game,h=G.hero,hd=G.heroData,d=G.derived;
-    const heroes=[['host',hd.name,heroTuple(h,hd,d)]];
-    for(const pid in this.peers){const r=this.peers[pid].r;heroes.push([pid,r.name,[+r.x.toFixed(2),+r.y.toFixed(2),r.dir,r.flip?1:0,r.moving?1:0,+(r.anim||0).toFixed(2),r.dead?1:0,r.hurtT>0?1:0,r.blocking?1:0,r.aimW[0],r.aimW[1],r.hp,r.maxHp,r.level,r.bf||0,r.dash&&r.dash.kind||0,r._aseq||0,r._akind||0]]);}
-    const looks=this._lookT<=0?Object.fromEntries([['host',h.look],...Object.values(this.peers).map(p=>[p.pid,p.r.look])]):null;
-    const e=G.combatants.map(c=>{const st={};for(const k in c.st)if(c.st[k]>0&&COOP_DUR.includes(k))st[k]=+c.st[k].toFixed(1);
-      return [this.nidOf(c),+c.x.toFixed(2),+c.y.toFixed(2),Math.ceil(c.hp),c.maxHp,c.dir||'down',c.flip?1:0,c.moving?1:0,c.dead?1:0,c.wind?1:0,c.strikeT>0?1:0,st,c.hurtT>0?1:0,c.enraged?1:0,c.state==='fight'?1:0];});
-    const proj=G.projectiles.map(p=>projTuple(p,'host'));
-    for(const pid in this.peers)for(const q of this.peers[pid].proj)proj.push([...q.slice(0,7),pid]);
-    const fx=coopTakeFx().map(f=>['host',f]).concat(this._relay||[]);this._relay=[];
-    return {k:'snap',fx,t:G.flags.clock,w:G.weather?[G.weather.type,+G.weather.k.toFixed(2)]:null,heroes,looks,e,proj,
-      c:G.coins.map(c=>[this.nidOf(c),+c.x.toFixed(2),+c.y.toFixed(2),Math.round(c.z)]),
-      g:G.groundItems.map(g=>[this.nidOf(g),+g.x.toFixed(2),+g.y.toFixed(2),Math.round(g.z),g.it]),
-      a:(G.allies||[]).map(a=>[+a.x.toFixed(2),+a.y.toFixed(2),a.dir,a.flip?1:0,a.moving?1:0,+(a.anim||0).toFixed(2),a.downed?1:0,a.name,a.look,a.isGuard?1:0]),
-      hz:(G.hazards||[]).map(z=>[z.x,z.y,z.r,+z.t.toFixed(2),z.delay,z.col])};
-  },
-  /* ---------- Гість ---------- */
+  storeHd(p,hd){if(!hd||!CLASSES[hd.cls])return;const P=Game.flags.party||(Game.flags.party={});P[p.key]={name:p.name,hd};p.heroName=hd.name;p.level=hd.level;},
+  /* ---------- Гість: сесія ---------- */
   join(name,code,mode){
     name=String(name||'').trim().slice(0,16);code=String(code||'').trim().toUpperCase();
     if(!name){this.msg('Вкажи ім’я гравця.');return;}
@@ -8745,17 +8734,17 @@ const Net={
     this.role='guest';this.room=code;this.name=name;this.key=coopKey(name);this.pid='g'+Math.random().toString(36).slice(2,10);
     if(mode==='local'){
       if(!this.open(code)){this.reset();this.msg('Браузер не підтримує кооператив між вкладками.');return;}
-      this.hostLink={kind:'bc',send:m=>{m.to='host';if(this.bc)this.bc.postMessage(m);},close(){}};
-      this._joinT=CONFIG.coop.joinWait;this._joinMode='local';this.msg('Шукаю кімнату в іншій вкладці…');
+      this.hostLink={kind:'bc',send:m=>{m.to=m.to||'host';if(this.bc)this.bc.postMessage(m);},close(){}};
+      this._joinT=CONFIG.coop.joinWait;this._joinMode='local';this.msg('Шукаю кімнату…');
       this.send({k:'hello',name});return;
     }
     const base=coopServerBase();
-    if(base){this._viaMain=!window.CPR_SERVER&&!Store.get('cpr_coopServer');this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='srv';this.msg('Підключаюсь до сервера…');if(!this.openServer(base,this.pid)){this.reset();this.msg('Неправильна адреса сервера.');}return;}
+    if(base){this._viaMain=!window.CPR_SERVER&&!Store.get('cpr_coopServer');this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='srv';this.msg('Підключаюсь…');if(!this.openServer(base,this.pid)){this.reset();this.msg('Неправильна адреса сервера.');}return;}
     if(typeof RTCPeerConnection==='undefined'){this.reset();this.msg('Цей браузер не підтримує гру через інтернет.');return;}
-    this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='net';this.msg('Шукаю кімнату в інтернеті…');
+    this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='net';this.msg('Шукаю кімнату…');
     let tries=0;const knock=()=>{if(!this.isGuest()||this.pcs.host||tries>=CONFIG.coop.helloRetry)return;tries++;Signal.pub({t:'hello',from:this.pid});setTimeout(knock,3000);};
     Signal._onOpen=null;
-    if(!Signal.sub(coopTopic(code),m=>this.guestSig(m),ok=>{if(!ok&&this.isGuest()&&!this.hostLink&&!this.pcs.host)this.msg('Немає зв’язку із сервісом знайомства. Перевір інтернет.');})){this.reset();this.msg('Цей браузер не підтримує гру через інтернет.');return;}
+    if(!Signal.sub(coopTopic(code),m=>this.guestSig(m),ok=>{if(!ok&&this.isGuest()&&!this.hostLink&&!this.pcs.host)this.msg('Немає зв’язку. Перевір інтернет.');})){this.reset();this.msg('Цей браузер не підтримує гру через інтернет.');return;}
     Signal._onOpen=()=>{Signal._onOpen=null;knock();};
   },
   leave(){
@@ -8775,46 +8764,138 @@ const Net={
       case 'nope':this.reset();this.msg(m.msg);if(Game.state==='create'){UI.hide('create');UI.show('menu');Game.state='menu';this.openPanel();this.msg(m.msg);}return;
       case 'newHero':
         this._joinT=0;this._creating=true;UI.hide('coop');UI.hide('menu');UI.openCreate();
-        UI.toast('У цій кімнаті в тебе ще немає героя. Створи його — він зберігатиметься в грі хоста.',3.5);return;
+        UI.toast('Створи героя — він зберігатиметься в грі хоста.',3);return;
       case 'welcome':this._joinT=0;this._creating=false;this.startGuest(m);return;
       case 'end':this.hostGone('Хост закрив кімнату.');return;
-      case 'vis':this._hostHidden=!!m.hid;if(m.hid&&Game.heroData)UI.toast('Хост згорнув гру — світ рухається повільніше, поки він не повернеться.',3);return;
+      case 'vis':this._hostHidden=!!m.hid;return;
     }
     if(!Game.heroData)return;
     switch(m.k){
-      case 'loc':this.goLoc(m);return;
-      case 'snap':this.applySnap(m);return;
-      case 'ents':for(const D of m.ents)this.addMirror(D);this.syncMirrorList();return;
-      case 'flags':this.applyFlags(m.f);return;
-      case 'dmg':{const h=Game.hero;if(!h||h.dead)return;Game._aiSrc=m.el?{elite:m.el,dead:true}:null;try{heroTakeDamage(m.a,m.fx,m.fy);}finally{Game._aiSrc=null;}return;}
-      case 'knock':if(Game.hero&&!Game.hero.dead)heroKnock(Game.hero,m.dx,m.dy,m.p);return;
-      case 'kill':this.onKill(m.id);return;
-      case 'qdone':coopQuestReward(m);return;
-      case 'cleared':{const hd=Game.heroData,C=CONFIG.dungeon,lv=Math.max(hd.level,m.loc==='mine'?C.mineLevel:C.baseLevel);gainXp(C.clearXpBase+C.clearXpPerLevel*lv);return;}
-      case 'gold':{const hd=Game.heroData,h=Game.hero;hd.gold+=m.a;AudioSys.play('coin',{gap:0.06});floatText(h.x,h.y,46,`+${m.a} золота`,'#ffd23a',false,0.85);UI.updateHUD();return;}
-      case 'item':{const hd=Game.heroData,h=Game.hero,it=m.it;if(!it||!ITEM_BASES[it.base])return;
-        if(Inv.add(hd,it)){floatText(h.x,h.y,48,it.name+(it.qty>1?` ×${it.qty}`:''),RARITY[it.rarity].tip,false,0.85);AudioSys.play('pickup');UI.refreshInventory();}
-        else{UI.toast('Інвентар заповнений.',1.8);this.send({k:'drop',it,x:h.x,y:h.y});}return;}
+      case 'locs':this.applyLocs(m);return;
+      case 'flags':this.applyHostFlags(m.f,(m.ack||{})[this.pid]);return;
     }
+    this.onAny(m);
+  },
+  applyLocs(m){
+    this.locs=m.locs||{};this.auth=m.auth||{};this.seeds=m.seeds||{};this.who=m.who||{};if(m.hostName)this._hostName=m.hostName;
+    if(m.clock!=null&&Game.flags)Game.flags.clock=m.clock;
+    this.updateTag();this.renderPanel();
   },
   startGuest(m){
     UI.hide('coop');UI.hide('create');UI.hide('menu');
-    const hd=m.hd;
+    this._hostName=m.hostName;this.applyLocs(m);this._base=coopClone(m.flags)||{};
     const L=LOCATIONS[m.loc],start=L&&!L.dungeon?m.loc:(L&&L.parent)||'city';
-    this._hostName=m.hostName;
-    Game.beginSession(hd,null,{flags:m.flags||{},pos:{loc:start,x:NaN,y:NaN},meta:{savedAt:null},shops:null});
+    Game.beginSession(m.hd,null,{flags:m.flags||{},pos:{loc:start,x:start===m.loc?m.x:NaN,y:start===m.loc?m.y:NaN},meta:{savedAt:null},shops:null});
     this.updateTag();
-    UI.toast(`Ти в кімнаті ${m.room}. Хост — ${m.hostName}. Переходи між локаціями веде хост.`,4);
-    this.goLoc(m);
+    UI.toast(`Ти в кімнаті ${m.room}.`,2.5);
   },
-  goLoc(m){
-    const h=Game.hero,hd=Game.heroData;
-    if(h&&h.dead){hd.hp=Game.derived.maxHp;h.dead=false;h.iframe=1.5;UI.hide('death');}
-    this.applyFlags(m.flags);this._seed=m.seed;this._pending=m;this._allowLoc=true;
-    this.remotes=[];this.ghostAllies=[];this.ghostProj=[];this.ghostHaz=[];
-    Game._traveling=false;Game.changeLocation(m.loc,{x:m.x,y:m.y});
+  /* Прапорці світу: хост — головний; гість надсилає свої зміни (fpatch) і не губить їх, коли приходить стан від хоста */
+  applyHostFlags(f,ack){
+    if(!f)return;const unsent=coopFlagDiff(Game.flags||{},this._base),clock=Game.flags&&Game.flags.clock;
+    this._inflight=(this._inflight||[]).filter(x=>x.seq>(ack||0));
+    const base=coopClone(f)||{};for(const x of this._inflight)coopApplyPatch(base,x.p);
+    this._base=base;Game.flags=coopClone(base)||{};coopApplyPatch(Game.flags,unsent);if(clock!=null)Game.flags.clock=clock;
+    coopFlagsChanged();
   },
-  applyFlags(f){if(!f)return;const clock=Game.flags&&Game.flags.clock;Game.flags=f;if(clock!=null&&f.clock==null)f.clock=clock;},
+  /* ---------- Спільне для всіх: локації, бій, здобич ---------- */
+  onAny(m){
+    const me=this.myLoc();
+    switch(m.k){
+      case 'st':this.onSt(m);return;
+      case 'snap':if(this._mirror&&m.loc===me&&m.from===this.authPid())this.applySnap(m);return;
+      case 'need':if(m.loc===me&&this.isAuth()){const L=Game.combatants.filter(c=>m.all||(m.ids||[]).includes(c.nid)).map(c=>this.descOf(c)).filter(Boolean);this.toPid(m.from,{k:'ents',loc:me,ents:L,cleared:!!Game.world.cleared});}return;
+      case 'ents':if(this._mirror&&m.loc===me){for(const D of m.ents)this.addMirror(D);if(m.cleared)Game.world.cleared=true;this.syncMirrorList();}return;
+      case 'hit':if(m.loc===me&&this.isAuth())this.applyHit(m);return;
+      case 'pick':if(m.loc===me&&this.isAuth()){const i=Game.coins.findIndex(c=>c.nid===m.id);if(i<0)return;const c=Game.coins[i];Game.coins.splice(i,1);this.toPid(m.from,{k:'gold',a:c.amount});}return;
+      case 'pickI':if(m.loc===me&&this.isAuth()){const i=Game.groundItems.findIndex(g=>g.nid===m.id);if(i<0)return;const g=Game.groundItems[i];Game.groundItems.splice(i,1);this.toPid(m.from,{k:'item',it:g.it});}return;
+      case 'drop':if(m.loc===me&&this.isAuth()&&m.it&&ITEM_BASES[m.it.base])dropItem(m.x,m.y,m.it);return;
+      case 'dropc':if(m.loc===me&&this.isAuth()&&m.a>0)dropCoins(m.x,m.y,m.a);return;
+      case 'dmg':{const h=Game.hero;if(!h||h.dead)return;Game._aiSrc=m.el?{elite:m.el,dead:true}:null;try{heroTakeDamage(m.a,m.fx,m.fy);}finally{Game._aiSrc=null;}return;}
+      case 'knock':if(Game.hero&&!Game.hero.dead)heroKnock(Game.hero,m.dx,m.dy,m.p);return;
+      case 'kill':if(m.loc===me&&this._mirror)this.onKill(m.id);return;
+      case 'cleared':if(m.loc===me){const hd=Game.heroData,C=CONFIG.dungeon,lv=Math.max(hd.level,me==='mine'?C.mineLevel:C.baseLevel);Game.world.cleared=true;gainXp(C.clearXpBase+C.clearXpPerLevel*lv);}return;
+      case 'gold':{const hd=Game.heroData,h=Game.hero;hd.gold+=m.a;AudioSys.play('coin',{gap:0.06});floatText(h.x,h.y,46,`+${m.a} золота`,'#ffd23a',false,0.85);UI.updateHUD();return;}
+      case 'item':{const hd=Game.heroData,h=Game.hero,it=m.it;if(!it||!ITEM_BASES[it.base])return;
+        if(Inv.add(hd,it)){floatText(h.x,h.y,48,it.name+(it.qty>1?` ×${it.qty}`:''),RARITY[it.rarity].tip,false,0.85);AudioSys.play('pickup');Quests.emit('item',it.base);UI.refreshInventory();}
+        else{UI.toast('Інвентар заповнений.',1.8);dropItem(h.x,h.y,it);}return;}
+      case 'qdone':coopQuestReward(m);return;
+      case 'talk':this.onTalk(m);return;
+    }
+  },
+  onSt(m){
+    const me=this.myLoc();
+    if(m.loc!==me){this.remotes=this.remotes.filter(r=>r.pid!==m.from);delete this._pj[m.from];return;}
+    let r=this.remotes.find(x=>x.pid===m.from);
+    if(!r){r=new Critter({isHero:true,isRemote:true,pid:m.from,name:m.nm||'',r:CONFIG.hero.radius,look:m.lk||Game.hero.look,dir:'down',buffs:{},aimW:[1,0]});r.x=r.tx=m.h[0];r.y=r.ty=m.h[1];this.remotes.push(r);}
+    r.name=m.nm||r.name;if(m.lk)r.look=m.lk;r._seen=performance.now();this.applyHero(r,m.h);
+    this._pj[m.from]=(m.pj||[]).map(p=>({x:p[0],y:p[1],dx:p[2],dy:p[3],z:p[4],kind:p[5],speed:p[6]}));
+    if(m.fx&&m.fx.length)coopApplyFx(m.fx);
+  },
+  /* Розмова з мешканцем: поки один говорить, інший чекає */
+  onTalk(m){
+    const now=performance.now();
+    if(m.on){this.npcBusy[m.key]={pid:m.from,name:m.name,t:now};
+      if(this.talking===m.key&&m.from<this.pid){this.talking=null;UI.closeDialog&&UI.closeDialog();UI.toast(`${m.name} саме заговорив із цим мешканцем.`,2.4);}}
+    else if(this.npcBusy[m.key]&&this.npcBusy[m.key].pid===m.from)delete this.npcBusy[m.key];
+  },
+  talkBusy(npc){const b=this.npcBusy[this.myLoc()+':'+npc.id];return b&&b.pid!==this.pid&&performance.now()-b.t<CONFIG.coop.talkLock*1000?b:null;},
+  /* ---------- Рахувати локацію чи бачити копію ---------- */
+  checkMode(){
+    if(!Game.heroData||Game.state==='travel'||Game._traveling)return;
+    const auth=this.isAuth();
+    if(auth&&this._mirror)this.toAuth();else if(!auth&&!this._mirror)this.toMirror();
+  },
+  toMirror(){
+    this._mirror=true;this.mirrors=new Map();Game.combatants=[];Game.coins=[];Game.groundItems=[];Game.allies=[];Game.hazards=[];
+    this.toPid(this.authPid(),{k:'need',all:1,loc:this.myLoc()});
+  },
+  toAuth(){
+    this._mirror=false;
+    for(const e of this.mirrors.values()){delete e.update;delete e.onHurt;delete e.onKill;e.mirror=false;e.tx=e.ty=undefined;
+      if(e.isEnemy&&!e.dead){e.state='idle';e.path=null;e.wind=null;e.dash=null;e._cm=e.cm||1;e._sm=e.maxHp;}}
+    this.mirrors=new Map();this.ghostAllies=[];this.ghostHaz=[];
+    for(const c of Game.coins)c.t=1;for(const g of Game.groundItems)delete g.isGuest;
+  },
+  nidOf(o){return o.nid||(o.nid=this.pid+'.'+(++this._nid));},
+  descOf(c){
+    let s=c.spawn?coopClone(c.spawn):(c instanceof Dummy?{type:'dummy',x:c.x,y:c.y,armored:!!c.armored}:null);
+    if(!s)return null;
+    return {nid:this.nidOf(c),s,x:c.x,y:c.y,dead:!!c.dead,hp:c.hp,maxHp:c.maxHp,level:c.level,elite:c.elite||null,name:c.name,look:coopClone(c.look),scale:c.scale,h:c.h,r:c.r,boss:!!c.boss,unique:c.unique||null,armor:c.armor};
+  },
+  applyHit(m){
+    const e=Game.combatants.find(c=>c.nid===m.id);if(!e||e.dead)return;
+    e.hp-=m.d;e.hurtT=0.14;e.lastHitT=0;
+    if(m.d>0)floatText(e.x,e.y,30,Math.round(m.d),'#ffffff',false,0.9);
+    if(m.st)for(const k in m.st){const v=m.st[k];if(COOP_DUR.includes(k))e.st[k]=Math.max(e.st[k]||0,v);else e.st[k]=v;}
+    if(m.kv&&!e.fixed){e.vx=(e.vx||0)+m.kv[0];e.vy=(e.vy||0)+m.kv[1];}else if(e.fixed&&m.d>0)e.wobble=Math.max(e.wobble||0,0.2);
+    if(e.hp<=0){e.hp=0;e.onKill();}else if(e.onHurt)e.onHurt();
+  },
+  hurtRemote(r,amount,fx,fy,src){
+    if(!r||r.dead)return null;
+    this.toPid(r.pid,{k:'dmg',a:amount,fx,fy,el:src&&src.elite?src.elite:null});
+    if(src&&src.elite&&src.elite.includes('vamp')&&!src.dead){const a=Math.round(amount*0.6);src.hp=Math.min(src.maxHp,src.hp+a);floatText(src.x,src.y,src.h,'+'+a,'#ff6a8a',false,0.8);}
+    r.hurtT=0.22;return 'hit';
+  },
+  knockRemote(r,dx,dy,power){if(r)this.toPid(r.pid,{k:'knock',dx,dy,p:power});},
+  /* Здоров'я ворогів росте з кількістю гравців на локації */
+  scaleEnemies(){
+    const mult=this.role&&this.isAuth()?1+CONFIG.coop.enemyHpPerPlayer*(this.players()-1):1;
+    for(const c of Game.combatants||[]){if(!c.isEnemy||c.dead||c.mirror)continue;
+      if(c._sm!==c.maxHp)c._cm=1;
+      const cm=c._cm||1;if(cm===mult)continue;
+      const k=mult/cm;c.maxHp=Math.max(1,Math.round(c.maxHp*k));c.hp=clamp(Math.round(c.hp*k),1,c.maxHp);c._cm=mult;c._sm=c.maxHp;}
+  },
+  snapshot(){
+    const G=Game;
+    const e=G.combatants.map(c=>{const st={};for(const k in c.st)if(c.st[k]>0&&COOP_DUR.includes(k))st[k]=+c.st[k].toFixed(1);
+      return [this.nidOf(c),+c.x.toFixed(2),+c.y.toFixed(2),Math.ceil(c.hp),c.maxHp,c.dir||'down',c.flip?1:0,c.moving?1:0,c.dead?1:0,c.wind?1:0,c.strikeT>0?1:0,st,c.hurtT>0?1:0,c.enraged?1:0,c.state==='fight'?1:0,c._cm||1];});
+    return {k:'snap',w:G.weather?[G.weather.type,+G.weather.k.toFixed(2)]:null,e,
+      proj:G.projectiles.filter(p=>p.owner!=='hero').map(p=>projTuple(p,this.pid)),
+      c:G.coins.map(c=>[this.nidOf(c),+c.x.toFixed(2),+c.y.toFixed(2),Math.round(c.z),c.amount]),
+      g:G.groundItems.map(g=>[this.nidOf(g),+g.x.toFixed(2),+g.y.toFixed(2),Math.round(g.z),g.it]),
+      a:(G.allies||[]).map(a=>[+a.x.toFixed(2),+a.y.toFixed(2),a.dir,a.flip?1:0,a.moving?1:0,+(a.anim||0).toFixed(2),a.downed?1:0,a.name,a.look,a.isGuard?1:0]),
+      hz:(G.hazards||[]).map(z=>[z.x,z.y,z.r,+z.t.toFixed(2),z.delay,z.col])};
+  },
   addMirror(D){
     if(this.mirrors.has(D.nid))return this.mirrors.get(D.nid);
     let e;try{e=makeCombatant(D.s);}catch(err){return null;}
@@ -8826,39 +8907,26 @@ const Net={
   },
   syncMirrorList(){Game.combatants=[...this.mirrors.values()];},
   applySnap(m){
-    const G=Game,dt=dtNow();
-    if(m.t!=null&&G.flags)G.flags.clock=m.t;
+    const G=Game;
     if(m.w){G.weather=G.weather||{};Object.assign(G.weather,{type:m.w[0],k:m.w[1],until:G.time+1e9,loc:G.locationId});}
     if(G._traveling||G.state==='travel')return;
-    if(m.fx&&m.fx.length)coopApplyFx(m.fx.filter(x=>x[0]!==this.pid).map(x=>x[1]));
-    // герої
-    const seen=new Set();
-    for(const [pid,name,t] of m.heroes){if(pid===this.pid)continue;seen.add(pid);
-      let r=this.remotes.find(x=>x.pid===pid);
-      if(!r){r=new Critter({isHero:true,isRemote:true,pid,name,r:CONFIG.hero.radius,look:(m.looks&&m.looks[pid])||G.hero.look,dir:'down',buffs:{},aimW:[1,0]});r.x=r.tx=t[0];r.y=r.ty=t[1];this.remotes.push(r);}
-      r.name=name;this.applyHero(r,t,dt);if(m.looks&&m.looks[pid])r.look=m.looks[pid];}
-    this.remotes=this.remotes.filter(r=>seen.has(r.pid));
-    // вороги
     const need=[],live=new Set();
     for(const t of m.e){const e=this.mirrors.get(t[0]);live.add(t[0]);if(!e){need.push(t[0]);continue;}
       e.tx=t[1];e.ty=t[2];e.hp=t[3];e.maxHp=t[4];e.dir=t[5];e.flip=!!t[6];e.moving=!!t[7];
       if(t[8]&&!e.dead){e.dead=true;e.deadT=0;}else if(!t[8]&&e.dead){e.dead=false;e.x=e.tx;e.y=e.ty;}
-      e.wind=t[9]?(e.wind||{t:0}):null;e.strikeT=t[10]?0.1:0;e.st=t[11]||{};if(t[12])e.hurtT=0.1;e.enraged=!!t[13];e.state=t[14]?'fight':'idle';}
+      e.wind=t[9]?(e.wind||{t:0}):null;e.strikeT=t[10]?0.1:0;e.st=t[11]||{};if(t[12])e.hurtT=0.1;e.enraged=!!t[13];e.state=t[14]?'fight':'idle';e.cm=t[15]||1;}
     for(const id of [...this.mirrors.keys()])if(!live.has(id))this.mirrors.delete(id);
     this.syncMirrorList();
-    if(need.length&&performance.now()-(this._needT||0)>500){this._needT=performance.now();this.send({k:'need',ids:need});}
-    // снаряди інших гравців і ворогів
-    this.ghostProj=m.proj.filter(p=>p[7]!==this.pid).map(p=>({x:p[0],y:p[1],dx:p[2],dy:p[3],z:p[4],kind:p[5],speed:p[6]}));
-    // монети й речі на землі
-    G.coins=m.c.map(([nid,x,y,z])=>({nid,x,y,z,vz:0,t:-1e9,amount:0}));
+    if(need.length&&performance.now()-(this._needT||0)>500){this._needT=performance.now();this.toPid(this.authPid(),{k:'need',ids:need,loc:this.myLoc()});}
+    this._pj.auth=m.proj.map(p=>({x:p[0],y:p[1],dx:p[2],dy:p[3],z:p[4],kind:p[5],speed:p[6]}));
+    G.coins=m.c.map(([nid,x,y,z,amount])=>({nid,x,y,z,vz:0,t:-1e9,amount}));
     const old=new Map(G.groundItems.map(g=>[g.nid,g]));
     G.groundItems=m.g.map(([nid,x,y,z,it])=>{const o=old.get(nid);if(o){o.x=x;o.y=y;o.z=z;return o;}return {nid,it,x,y,z,vz:0,t:9,isGuest:true,isGround:true,promptZ:22};});
-    // союзники хоста й удари по землі
     this.ghostAllies=m.a.map((a,i)=>{const c=this.ghostAllies[i]&&this.ghostAllies[i].name===a[7]?this.ghostAllies[i]:new Critter({r:0.3,look:a[8],name:a[7],ghostAlly:true});
       c.tx=a[0];c.ty=a[1];if(c.x==null){c.x=a[0];c.y=a[1];}c.dir=a[2];c.flip=!!a[3];c.moving=!!a[4];c.anim=a[5];c.downed=!!a[6];c.look=a[8];return c;});
     this.ghostHaz=m.hz.map(z=>({x:z[0],y:z[1],r:z[2],t:z[3],delay:z[4],col:z[5]}));
   },
-  applyHero(r,t,dt){
+  applyHero(r,t){
     r.tx=t[0];r.ty=t[1];if(r.x==null||Math.hypot(r.tx-r.x,r.ty-r.y)>4){r.x=r.tx;r.y=r.ty;}
     r.dir=t[2];r.flip=!!t[3];r.moving=!!t[4];r.anim=t[5];r.dead=!!t[6];if(t[7])r.hurtT=0.15;r.blocking=!!t[8];r.aimW=[t[9],t[10]];
     r.hp=t[11];r.maxHp=t[12];r.level=t[13];r.bf=t[14];r.buffs={warcry:t[14]&1?1:0,manaShield:t[14]&2?1:0,fortify:t[14]&4?1:0,eagle:t[14]&8?1:0};r.dash=t[15]?{kind:t[15]}:null;
@@ -8878,46 +8946,54 @@ const Net={
     const kv=(t.vx||0)-vx0||(t.vy||0)-vy0?[+((t.vx||0)-vx0).toFixed(3),+((t.vy||0)-vy0).toFixed(3)]:null;
     t.vx=vx0;t.vy=vy0;
     if(d<=0&&!Object.keys(st).length&&!kv)return;
-    this.send({k:'hit',id:t.nid,d:Math.round(d),st:Object.keys(st).length?st:null,kv});
+    this.toPid(this.authPid(),{k:'hit',loc:this.myLoc(),id:t.nid,d:Math.round(d),st:Object.keys(st).length?st:null,kv});
   },
   /* ---------- Щокадрове оновлення ---------- */
   update(dt){
     if(!this.role)return;
     const C=CONFIG.coop,now=performance.now(),k=1-Math.exp(-C.lerp*dt);
     for(const r of this.remotes.concat(this.ghostAllies)){if(r.tx==null)continue;r.x+=(r.tx-r.x)*k;r.y+=(r.ty-r.y)*k;r.idleT=(r.idleT||0)+dt;r.hurtT=Math.max(0,(r.hurtT||0)-dt);}
+    this.remotes=this.remotes.filter(r=>now-(r._seen||now)<2500);
+    this.ghostProj=[].concat(...Object.values(this._pj));
     for(const p of this.ghostProj){p.x+=p.dx*p.speed*dt;p.y+=p.dy*p.speed*dt;}
     if(this.isGuest()){
       if(this._joinT>0){this._joinT-=dt;if(this._joinT<=0){const mode=this._joinMode,had=!!this.pcs.host;this.reset();
-        this.msg(mode==='srv'?'Сервер не відповів. Перевір адресу, код кімнати і чи запущено сервер.':mode==='local'?'Кімнату не знайдено. Перевір код і чи відкрита гра хоста в іншій вкладці цього браузера.':had?'Не вдалося з’єднатися напряму. Деякі мережі (часто мобільний інтернет) блокують прямі з’єднання — спробуйте Wi‑Fi.':'Кімнату не знайдено. Перевір код і чи хост створив кімнату.');}return;}
+        this.msg(mode==='srv'?'Сервер не відповів. Перевір код кімнати.':mode==='local'?'Кімнату не знайдено.':had?'Не вдалося з’єднатися. Спробуйте Wi‑Fi або сервер гри.':'Кімнату не знайдено. Перевір код.');}return;}
       if(!Game.heroData||!Game.hero)return;
-      if(Game.combatants.some(c=>!c.mirror))Net.syncMirrorList();
-      if((Game.allies||[]).length)Game.allies=[];
       if(now-this._lastHost>(this._hostHidden?C.timeoutHidden:C.timeout)*1000){this.hostGone('Зв’язок із хостом утрачено.');return;}
     }else{
       for(const pid in this.peers){const q=this.peers[pid];if(now-q.last>(q.hidden?C.timeoutHidden:C.timeout)*1000)this.removePeer(pid,'відключається (немає зв’язку)');}
-      this.scaleEnemies();
-      if(this._locDirty&&Game.state!=='travel'&&!Game._traveling&&Object.keys(this.peers).length){this._locDirty=false;this.sendLoc();}
     }
+    if(!Game.heroData||!Game.hero)return;
+    this.checkMode();
+    if(this._mirror){if(Game.combatants.some(c=>!c.mirror))this.syncMirrorList();if((Game.allies||[]).length)Game.allies=[];}
+    else this.scaleEnemies();
+    // розмова з мешканцем закінчилась — звільняємо його
+    if(this.talking){if(Game.state!=='dialog'){this.toAll({k:'talk',key:this.talking,on:0});this.talking=null;}
+      else if(now-(this._talkT||0)>5000){this._talkT=now;this.toAll({k:'talk',key:this.talking,on:1,name:Game.heroData.name});}}
     this._sendT-=dt;if(this._sendT>0)return;this._sendT=1/C.sendHz;
+    const G=Game,h=G.hero,hd=G.heroData;if(G.state==='travel'||G._traveling)return;
     this._lookT-=1/C.sendHz;
+    // свій герой — усім на локації (хост ще й веде облік, де хто)
+    const st={k:'st',h:heroTuple(h,hd,G.derived),nm:hd.name,pj:G.projectiles.filter(p=>p.owner==='hero').map(p=>projTuple(p,this.pid).slice(0,7))};
+    if(this._lookT<=0){this._lookT=2;st.lk=h.look;}
+    const fx=coopTakeFx();if(fx.length)st.fx=fx;
+    this.toLoc(st);
+    // локація, яку я рахую, — тим, хто на ній
+    if(!this._mirror&&this.others(this.myLoc()).length)this.toLoc(this.snapshot());
     if(this.isHost()){
-      if(!Object.keys(this.peers).length||!Game.hero)return;
-      this.send(this.snapshot());if(this._lookT<=0)this._lookT=2;
-      this._flagsT-=1/C.sendHz;if(this._flagsT<=0){this._flagsT=C.flagsEvery;const f=this.flagsForGuest(),j=JSON.stringify(f);if(j!==this._flagsJson){this._flagsJson=j;this.send({k:'flags',f});}}
+      this._locsT-=1/C.sendHz;if(this._locsT<=0){this._locsT=2;this.send(this.locsMsg());}
+      this._flagsT-=1/C.sendHz;if(this._flagsT<=0){this._flagsT=C.flagsEvery;const f=this.flagsForGuest(),ack={...(this._acks||{})},j=JSON.stringify([f,ack]);if(j!==this._flagsJson){this._flagsJson=j;this.send({k:'flags',f,ack});}}
     }else{
-      const G=Game,h=G.hero,hd=G.heroData;if(G.state==='travel'||G._traveling)return;
-      const m={k:'st',h:heroTuple(h,hd,G.derived),nm:hd.name,pj:G.projectiles.filter(p=>p.owner==='hero').map(p=>projTuple(p,this.pid).slice(0,7))};
-      if(this._lookT<=0){this._lookT=2;m.lk=h.look;}
-      const fx=coopTakeFx();if(fx.length)m.fx=fx;
-      this.send(m);
       this._hdT-=1/C.sendHz;if(this._hdT<=0){this._hdT=C.heroSaveEvery;const j=JSON.stringify(hd);if(j!==this._hdJson){this._hdJson=j;this.send({k:'hd',hd:coopClone(hd)});}}
-      if(!h.dead)for(const c of G.coins)if(Math.hypot(c.x-h.x,c.y-h.y)<CONFIG.loot.coinMagnet){const t=(this._pickT||(this._pickT={}));if(now-(t[c.nid]||0)>600){t[c.nid]=now;this.send({k:'pick',id:c.nid});}}
+      this._flagsT-=1/C.sendHz;if(this._flagsT<=0){this._flagsT=1;const p=coopFlagDiff(G.flags,this._base);if(p.length){const seq=this._pseq=(this._pseq||0)+1;(this._inflight||(this._inflight=[])).push({seq,p});coopApplyPatch(this._base,p);this.send({k:'fpatch',p,seq});}}
     }
+    if(this._mirror&&!h.dead)for(const c of G.coins)if(Math.hypot(c.x-h.x,c.y-h.y)<CONFIG.loot.coinMagnet){const t=(this._pickT||(this._pickT={}));if(now-(t[c.nid]||0)>600){t[c.nid]=now;this.toPid(this.authPid(),{k:'pick',id:c.nid,loc:this.myLoc()});}}
   },
   /* ---------- Вікно й мітка ---------- */
   updateTag(){
     const el=$('coopTag');if(!this.role){el.classList.add('hidden');return;}
-    el.textContent=this.isHost()?`Кімната ${this.room} · гравців ${this.players()}/${CONFIG.coop.maxPlayers}`:`Кооператив · хост ${this._hostName||''}`;
+    el.textContent=`Кімната ${this.room} · гравців ${this.roomSize()}/${CONFIG.coop.maxPlayers}`;
     el.classList.toggle('hidden',!Game.heroData);
   },
   msg(t){const el=$('coopMsg');if(el)el.textContent=t||'';},
@@ -8925,44 +9001,49 @@ const Net={
   renderPanel(){
     const b=$('coopBody');if(!b||$('coop').classList.contains('hidden'))return;
     const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-    const list=()=>'<ul class="coopList">'+[`<li>👑 ${esc(this.isHost()?Game.heroData.name:this._hostName||'Хост')} — хост</li>`,
-      ...(this.isHost()?Object.values(this.peers).map(p=>`<li>${esc(p.r.name)} (${esc(p.name)}) · рівень ${p.r.level}${p.hidden?' · згорнув гру':''}</li>`):this.remotes.filter(r=>r.pid!=='host').map(r=>`<li>${esc(r.name)} · рівень ${r.level||'?'}</li>`))].join('')+'</ul>';
-    const srvRow=`<div class="coopRow"><label>Сервер <input id="coopSrv" placeholder="необов’язково" autocomplete="off" style="width:220px;letter-spacing:0;text-transform:none;font-size:15px"></label></div>
-        <div class="invHint">Зазвичай порожньо: сервер гри гра знаходить сама. Сюди — лише адреса іншого, власного сервера.</div>`;
-    const bindSrv=()=>{const el=$('coopSrv');if(!el)return;el.value=Store.get('cpr_coopServer')||'';el.onkeydown=e=>e.stopPropagation();};
-    const saveSrv=()=>{const el=$('coopSrv');if(el)Store.set('cpr_coopServer',el.value.trim());};
+    const locName=l=>l&&LOCATIONS[l]?LOCATIONS[l].name:'';
+    const list=()=>{const who=this.isHost()?this.locsMsg().who:this.who,rows=[];
+      for(const p in who){const [n,lv,l]=who[p];rows.push(`<li>${p==='host'?'👑 ':''}${esc(n)} · ${lv} · ${esc(locName(l))}${p===this.pid?' (ти)':''}</li>`);}
+      return '<ul class="coopList">'+rows.join('')+'</ul>';};
     const st=MainServer.statusHtml();
     if(this.isHost()){
       b.innerHTML=st+`<div class="sectionT">Код кімнати</div><div class="coopCode">${this.room}</div>${list()}
-        <div class="invHint">${this.srvOk?'🖥 Кімната також на сервері гри — друзі з будь-якої країни підключаться через нього.<br>':''}${this.sigOk?'🌐 Кімната відкрита в інтернеті.':'⚠ Інтернет-кімната недоступна (немає зв’язку із сервісом знайомства) — приєднатися можна лише з іншої вкладки цього браузера.'}<br>Друг відкриває гру, «Кооператив» у головному меню → ім’я → цей код → «Через інтернет» (або «З іншої вкладки», якщо грає на цьому ж пристрої).</div>
         <div class="coopRow"><button class="btn small secondary" id="btnCoopClose">Закрити кімнату</button></div>`;
       $('btnCoopClose').onclick=()=>this.closeRoom();
     }else if(this.isGuest()&&Game.heroData){
-      b.innerHTML=st+`<div class="sectionT">Ти в кімнаті ${esc(this.room)}</div>${list()}
-        <div class="invHint">Твій герой зберігається в грі хоста. Ти можеш торгувати, користуватися ковалем, алхімією, сховищем і збирати ресурси. Завдання, контракти, двері й переходи веде хост, а нагороду за завдання отримує весь загін.</div>
+      b.innerHTML=st+`<div class="sectionT">Кімната ${esc(this.room)}</div>${list()}
         <div class="coopRow"><button class="btn small secondary" id="btnCoopLeave">Вийти з кімнати</button></div>`;
       $('btnCoopLeave').onclick=()=>this.leave();
     }else if(this._from==='game'){
-      b.innerHTML=st+`<div class="invHint">Створи кімнату — і друзі зможуть приєднатися до твого світу. Приєднатися до чужої кімнати можна з головного меню.</div>
-        ${srvRow}
-        <div class="coopRow"><button class="btn" id="btnCoopHost">Створити кімнату</button></div>`;
-      bindSrv();$('btnCoopHost').onclick=()=>{saveSrv();this.hostRoom();MainServer.check(false);};
+      b.innerHTML=st+`<div class="coopRow"><button class="btn" id="btnCoopHost">Створити кімнату</button></div>`;
+      $('btnCoopHost').onclick=()=>{this.hostRoom();MainServer.check(false);};
     }else{
-      b.innerHTML=st+`<div class="sectionT">Приєднатися до кімнати</div>
-        <div class="coopRow"><label>Ім’я гравця <input id="coopName" maxlength="16" style="width:170px;letter-spacing:0;text-transform:none"></label></div>
+      b.innerHTML=st+`<div class="coopRow"><label>Ім’я гравця <input id="coopName" maxlength="16" style="width:170px;letter-spacing:0;text-transform:none"></label></div>
         <div class="coopRow"><label>Код <input id="coopCodeIn" maxlength="4" autocomplete="off"></label></div>
-        ${srvRow}
-        <div class="coopRow"><button class="btn" id="btnCoopJoin">Через інтернет</button><button class="btn secondary" id="btnCoopJoinLocal">З іншої вкладки</button></div>
-        <div class="coopMsg" id="coopMsg"></div>
-        <div class="invHint">За ім’ям хост упізнає твого героя наступного разу.</div>`;
+        <div class="coopRow"><button class="btn" id="btnCoopJoin">Приєднатися</button></div>
+        <div class="coopMsg" id="coopMsg"></div>`;
       $('coopName').value=Store.get('cpr_coopName')||'';
-      bindSrv();$('btnCoopJoin').onclick=async()=>{saveSrv();if(!window.CPR_SERVER&&!Store.get('cpr_coopServer')){this.msg('Перевіряю сервер гри…');await MainServer.check(false);}this.join($('coopName').value,$('coopCodeIn').value,'net');};
-      $('btnCoopJoinLocal').onclick=()=>this.join($('coopName').value,$('coopCodeIn').value,'local');
+      $('btnCoopJoin').onclick=async()=>{if(!window.CPR_SERVER&&!Store.get('cpr_coopServer')){this.msg('Перевіряю сервер гри…');await MainServer.check(false);}this.join($('coopName').value,$('coopCodeIn').value,'net');};
       $('coopCodeIn').onkeydown=e=>{e.stopPropagation();if(e.key==='Enter')$('btnCoopJoin').click();};
       $('coopName').onkeydown=e=>e.stopPropagation();
     }
   },
 };
+/* Різниця прапорців світу (2 рівні вкладеності): [[шлях],значення,видалити?] */
+function coopIsObj(v){return v&&typeof v==='object'&&!Array.isArray(v);}
+function coopFlagDiff(a,b){
+  const out=[],skip=['clock','party'];a=a||{};b=b||{};
+  for(const k of new Set([...Object.keys(a),...Object.keys(b)])){if(skip.includes(k))continue;const va=a[k],vb=b[k];
+    if(coopIsObj(va)&&coopIsObj(vb)){for(const s of new Set([...Object.keys(va),...Object.keys(vb)])){if(JSON.stringify(va[s])!==JSON.stringify(vb[s]))out.push(va[s]===undefined?[[k,s],null,1]:[[k,s],va[s]]);}}
+    else if(JSON.stringify(va)!==JSON.stringify(vb))out.push(va===undefined?[[k],null,1]:[[k],va]);}
+  return out;
+}
+function coopApplyPatch(f,p){
+  for(const [path,v,del] of p||[]){
+    if(path.length===1){if(del)delete f[path[0]];else f[path[0]]=coopClone(v);}
+    else{if(!coopIsObj(f[path[0]]))f[path[0]]={};if(del)delete f[path[0]][path[1]];else f[path[0]][path[1]]=coopClone(v);}}
+}
+function coopFlagsChanged(){try{registerRepeatables();}catch(e){}UI.updateTracker();if(Game.panel==='board'&&UI.renderBoard)try{UI.renderBoard();}catch(e){}}
 function dtNow(){return 1/60;}
 /* Копія ворога в гостя: лише плавно їде до позиції з хоста, сам нічого не вирішує */
 function coopMirrorUpdate(dt){
@@ -8974,29 +9055,32 @@ function coopMirrorUpdate(dt){
 }
 /* Удари гостя по копіях ворогів: рахуються як звичайно, а хосту йде готова шкода, статуси й відкидання */
 {const _h=hitTarget;hitTarget=function(t,spec){
-  if(!(Net.isGuest()&&t&&t.mirror))return _h(t,spec);
+  if(!(t&&t.mirror))return _h(t,spec);
   if(t.dead)return false;
   const hp0=t.hp,big=hp0+1e6,st0={...t.st},vx0=t.vx||0,vy0=t.vy||0;t.hp=big;
   let r;try{r=_h(t,spec);}finally{const d=big-t.hp;t.hp=Math.max(0,hp0-d);Net.reportHit(t,d,st0,vx0,vy0);}
   return r;};}
 {const _d=dealRaw;dealRaw=function(t,amount,col){
-  if(!(Net.isGuest()&&t&&t.mirror))return _d(t,amount,col);
+  if(!(t&&t.mirror))return _d(t,amount,col);
   if(t.dead)return;
   const hp0=t.hp,big=hp0+1e6,st0={...t.st};t.hp=big;
   try{_d(t,amount,col);}finally{const d=big-t.hp;t.hp=Math.max(0,hp0-d);Net.reportHit(t,d,st0,t.vx||0,t.vy||0);}};}
 /* Гість підбирає речі через хоста: хто перший — того й річ */
 {const _p=pickUpGround;pickUpGround=function(g){
-  if(!(Net.isGuest()&&g&&g.nid))return _p(g);
+  if(!(g&&g.isGuest&&Net._mirror))return _p(g);
   if(performance.now()-(g._req||0)<600)return false;g._req=performance.now();
-  Net.send({k:'pickI',id:g.nid});return true;};}
+  Net.toPid(Net.authPid(),{k:'pickI',id:g.nid,loc:Net.myLoc()});return true;};}
+/* Здобич, що випала в того, хто бачить копію локації, — тому, хто її рахує (щоб усі її бачили) */
+{const _i=dropItem;dropItem=function(x,y,it){if(Net._mirror&&Net.role&&Game.heroData){Net.toPid(Net.authPid(),{k:'drop',loc:Net.myLoc(),x,y,it});return;}return _i(x,y,it);};}
+{const _c=dropCoins;dropCoins=function(x,y,a){if(Net._mirror&&Net.role&&Game.heroData){Net.toPid(Net.authPid(),{k:'dropc',loc:Net.myLoc(),x,y,a});return;}return _c(x,y,a);};}
 /* Досвід за вбивство лише поруч (у кооперативі) */
 {const _g=gainXp;gainXp=function(a){if(Net._noXp)return;return _g(a);};}
 
 function installCoopHooks(){
   const G=Game;
-  // насіння підземель — щоб у гостя вийшли ті самі коридори
+  // насіння підземель: якщо на локації вже хтось є — беремо його коридори
   for(const id in LOCATIONS){const def=LOCATIONS[id];if(typeof def.seed!=='function')continue;const f=def.seed;
-    def.seed=()=>{if(Net.isGuest()&&Net._seed!=null)return Net._seed;const s=f();Net.seeds[id]=s;return s;};}
+    def.seed=()=>{if(Net.role&&Net.others(id).length&&Net.seeds[id]!=null)return Net.seeds[id];const s=f();Net._mySeed[id]=s;return s;};}
   {const f=G.tick;G.tick=function(dt){if(!Net._bg)Net._rafT=performance.now();f.call(this,dt);try{Net.update(dt);}catch(e){console.error(e);}};}
   // Згорнута вкладка: браузер зупиняє requestAnimationFrame, тож у кооперативі гру крутить таймер (≈раз на секунду), надолужуючи час
   Net._rafT=performance.now();
@@ -9007,34 +9091,20 @@ function installCoopHooks(){
     try{for(let i=0;i<n;i++)G.tick(C.bgStep);}catch(e){console.error(e);}finally{Net._bg=false;}
   },250);
   document.addEventListener('visibilitychange',()=>{if(Net.role)Net.send({k:'vis',hid:document.hidden});});
+  // нова локація: повідомляємо хоста; якщо її вже хтось рахує — бачимо копію
   {const f=G.loadLocation;G.loadLocation=function(id){
     const r=f.call(this,id);
-    if(Net.isHost())Net._locDirty=true;
-    if(Net.isGuest()){
-      this.allies=[];this.hazards=[];
-      for(const ex of this.world.exits)if(!ex._coop){ex._coop=1;const l0=ex.lock,m0=ex.lockMsg;
-        ex.lock=function(){if(Net.isGuest()){ex.lockMsg='Переходи між локаціями веде хост.';return true;}ex.lockMsg=m0;return l0?l0.call(this):false;};}
-      Net.mirrors=new Map();const P=Net._pending;Net._pending=null;
-      if(P&&P.loc===id){for(const D of P.ents)Net.addMirror(D);if(P.cleared)this.world.cleared=true;}
-      Net.syncMirrorList();this.coins=[];this.groundItems=[];Net._allowLoc=false;
+    if(Net.role&&this.heroData){
+      Net._mirror=false;Net.remotes=[];Net._pj={};Net.ghostAllies=[];Net.ghostHaz=[];Net.mirrors=new Map();
+      const seed=Net._mySeed[id]??(Net.others(id).length?Net.seeds[id]:null)??null;delete Net._mySeed[id];
+      if(Net.isHost())Net.onEnter('host',id,seed);else Net.send({k:'enter',loc:id,seed});
+      if(!Net.isAuth())Net.toMirror();
     }
     return r;};}
-  {const f=G.changeLocation;G.changeLocation=function(to,pos){
-    if(Net.isGuest()&&!Net._allowLoc){if(this.time-(this._coopLocT||0)>2){this._coopLocT=this.time;UI.toast('Переходи між локаціями веде хост.',2);}return;}
-    return f.call(this,to,pos);};}
-  {const f=G.interact;G.interact=function(target){
-    const t=target||this.interactTarget;
-    if(Net.isGuest()&&t&&!t.isGround&&!t.isNpc&&!coopGuestObject(t)){if(this.time-(this._coopIT||0)>1.5){this._coopIT=this.time;UI.toast('Це робить хост: двері, скрині, дошки контрактів і завдання веде він.',3);}return;}
-    return f.call(this,target);};}
   {const f=G.onEnemyKilled;G.onEnemyKilled=function(e){
     const h=this.hero;Net._noXp=Net.live()&&(!h||h.dead||Math.hypot(h.x-e.x,h.y-e.y)>CONFIG.coop.xpRadius);
-    try{return f.call(this,e);}finally{Net._noXp=false;if(Net.isHost()&&e.nid)Net.send({k:'kill',id:e.nid});}};}
-  {const f=G.dungeonCleared;G.dungeonCleared=function(){const was=this.world.cleared;const r=f.call(this);if(Net.isHost()&&!was)Net.send({k:'cleared',loc:this.locationId});return r;};}
-  {const f=G.respawn;G.respawn=function(){
-    if(!Net.isGuest())return f.call(this);
-    const host=Net.remotes.find(r=>r.pid==='host'&&!r.dead),W=this.world,R0=W.respawn;
-    W.respawn=host?{x:host.x,y:host.y}:(R0||{x:this.hero.x,y:this.hero.y});
-    try{return f.call(this);}finally{W.respawn=R0;}};}
+    try{return f.call(this,e);}finally{Net._noXp=false;if(Net.role&&!Net._mirror&&e.nid)Net.toLoc({k:'kill',id:e.nid});}};}
+  {const f=G.dungeonCleared;G.dungeonCleared=function(){const was=this.world.cleared;const r=f.call(this);if(Net.role&&!Net._mirror&&!was)Net.toLoc({k:'cleared'});return r;};}
   {const f=G.startGame;G.startGame=function(){
     if(!Net._creating)return f.call(this);
     const cc=UI.cc;let name=$('heroName').value.trim().slice(0,16);if(!name)name=UI.randomName(cc.race);
@@ -9049,19 +9119,23 @@ function installCoopHooks(){
   {const f=UI.loadFrom;UI.loadFrom=function(i){if(Net.isHost())Net.closeRoom();if(Net.isGuest())return;return f.call(this,i);};}
   {const f=G.togglePause;G.togglePause=function(){const r=f.call(this);
     const gst=Net.isGuest();for(const id of ['btnSave','btnSaveAs','btnLoad2','btnSaveIO2'])$(id).classList.toggle('hidden',gst);
-    if(this.state==='pause'&&Net.live())$('pauseSaveInfo').textContent=gst?'Ти гість: прогрес героя зберігається в грі хоста.':'Кооператив: гра не стає на паузу.';
+    if(this.state==='pause'&&Net.live())$('pauseSaveInfo').textContent=gst?'Твій герой зберігається в грі хоста.':'Кооператив: гра не стає на паузу.';
     return r;};}
-  // події в дорозі, набіги й союзники — лише в хоста
-  {const f=syncAllies;syncAllies=function(...a){if(Net.isGuest()){Game.allies=[];return;}return f(...a);};}
-  {const f=syncTavernJobs;syncTavernJobs=function(...a){if(Net.isGuest())return;return f(...a);};}
-  if(typeof tickEvents==='function'){const f=tickEvents;tickEvents=function(dt){if(Net.isGuest())return;return f(dt);};}
-  if(typeof maybeRaid==='function'){const f=maybeRaid;maybeRaid=function(...a){if(Net.isGuest())return;return f(...a);};}
-  {const f=Quests.emit;Quests.emit=function(...a){if(Net.isGuest())return;return f.apply(this,a);};}
-  {const f=Quests.advance;Quests.advance=function(...a){if(Net.isGuest())return;return f.apply(this,a);};}
+  // події в дорозі, набіги й союзники — у того, хто рахує локацію
+  {const f=syncAllies;syncAllies=function(...a){if(Net._mirror&&Net.role){Game.allies=[];return;}return f(...a);};}
+  {const f=syncTavernJobs;syncTavernJobs=function(...a){if(Net._mirror&&Net.role)return;return f(...a);};}
+  if(typeof tickEvents==='function'){const f=tickEvents;tickEvents=function(dt){if(Net._mirror&&Net.role)return;return f(dt);};}
+  if(typeof maybeRaid==='function'){const f=maybeRaid;maybeRaid=function(...a){if(Net._mirror&&Net.role)return;return f(...a);};}
+  // один мешканець — одна розмова
+  {const f=talkTo;talkTo=function(npc){
+    if(Net.role&&Game.heroData){const b=Net.talkBusy(npc);if(b){npc.talking=false;UI.toast(`${b.name} уже розмовляє з ${npc.name}. Зачекай.`,2.4);return;}
+      const key=Net.myLoc()+':'+npc.id;Net.npcBusy[key]={pid:Net.pid,name:Game.heroData.name,t:performance.now()};Net.talking=key;Net._talkT=performance.now();
+      Net.toAll({k:'talk',key,on:1,name:Game.heroData.name});}
+    return f(npc);};}
   // малювання: снаряди, удари по землі й підписи інших гравців
   {const f=Render.draw;Render.draw=function(world,t){
     if(!Net.role)return f.call(this,world,t);
-    const P=Game.projectiles,Hz=Game.hazards;Game.projectiles=P.concat(Net.ghostProj);if(Net.isGuest())Game.hazards=Net.ghostHaz;
+    const P=Game.projectiles,Hz=Game.hazards;Game.projectiles=P.concat(Net.ghostProj);if(Net._mirror)Game.hazards=Net.ghostHaz;
     try{return f.call(this,world,t);}finally{Game.projectiles=P;Game.hazards=Hz;}};}
   {const f=Render.drawOverlay;Render.drawOverlay=function(){
     f.call(this);if(!Net.role||!Game.hero||!Net.remotes.length)return;
@@ -9084,30 +9158,13 @@ function installCoopHooks(){
 }
 
 /* ===================== ЕТАП 25: ГОСТІ В МИРНОМУ ЖИТТІ ===================== */
-/* Гості розмовляють із мешканцями, торгують, користуються ковалем, алхімією, сховищем і збирають ресурси
-   (усе це — справи їхнього героя). Завдання загону веде хост: у розмовах гостя пункти завдань замінено підказкою,
-   а нагороду (досвід і золото) за виконане хостом завдання чи контракт отримує кожен гість. */
-/* Об'єкти, якими гість користується сам: сховище в місті й ресурсні вузли (у кожного гравця свої) */
-function coopGuestObject(o){const a=o.interact&&o.interact.action;return !!(o.res||(a&&/Game\.openStash\(\)/.test(String(a))));}
-/* Мешканці, чиї розмови гостю можна повністю (лише поради, без рішень) */
-const COOP_GUEST_TALK_OK=['guide'];
+/* Нагорода за виконане завдання чи контракт — усьому загону (хто б його не здав), досягнення гостя — у його герої */
 function installCoopPeaceHooks(){
-  // розмова гостя: усе, крім рішень щодо завдань
-  {const f=talkTo;talkTo=function(npc){
-    if(!Net.isGuest())return f(npc);
-    const q=COOP_GUEST_TALK_OK.includes(npc.id)?null:QUEST_TALK[npc.id];
-    if(q)QUEST_TALK[npc.id]=nodes=>{let o=[];try{o=q(nodes)||[];}catch(e){}
-      // послуги (торгівля) лишаються; кімната на ніч переводить годинник світу — це вирішує хост
-      const keep=o.filter(x=>x.kind==='shop'&&!/rentRoom/.test(String(x.fn))),rest=o.length-keep.length;
-      if(!rest)return keep;
-      nodes.coopq={text:`Завдання загону веде хост${Net._hostName?' — '+Net._hostName:''}. Про це краще поговорити з ним, а нагороду отримаєте всі.`,opts:[{label:'Добре',to:'root'}]};
-      return [...keep,{label:'Про завдання…',kind:'quest',to:'coopq'}];};
-    try{return f(npc);}finally{if(q)QUEST_TALK[npc.id]=q;}};}
   // нагорода за завдання загону — кожному гостю
   {const f=Quests.complete;Quests.complete=function(id,extra){
     const def=QUESTS[id],R=(def&&def.reward)||{},title=def&&def.title;
     const r=f.call(this,id,extra);
-    if(Net.isHost()&&Object.keys(Net.peers).length&&title)Net.send({k:'qdone',title,xp:R.xp||0,gold:R.gold||0});
+    if(Net.live()&&title)Net.toAll({k:'qdone',title,xp:R.xp||0,gold:R.gold||0});
     return r;};}
   // досягнення гостя — у його герої (прапорці світу в гостя щоразу перезаписує хост)
   {const f=checkAchievements;checkAchievements=function(){
@@ -9256,9 +9313,9 @@ const MainServer={state:'unknown',url:null,name:'',players:0,_t:-1e9,_p:null,
   },
   statusHtml(){
     const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-    if(window.CPR_SERVER||Store.get('cpr_coopServer'))return `<div class="coopSrv wait">🖥 Використовується власний сервер: ${esc(window.CPR_SERVER||Store.get('cpr_coopServer'))}</div>`;
-    if(this.state==='online')return `<div class="coopSrv on">🟢 Сервер гри онлайн${this.name&&this.name!=='Сервер гри'?' — '+esc(this.name):''}. Гра йде через нього — працює між будь-якими мережами й країнами.</div>`;
-    if(this.state==='offline')return `<div class="coopSrv off">🔴 Сервер гри офлайн. Гравці з’єднуються напряму — між різними країнами чи через мобільний інтернет це може не спрацювати.</div>`;
+    if(window.CPR_SERVER||Store.get('cpr_coopServer'))return `<div class="coopSrv on">🟢 Сервер гри онлайн</div>`;
+    if(this.state==='online')return `<div class="coopSrv on">🟢 Сервер гри онлайн${this.name&&this.name!=='Сервер гри'?' — '+esc(this.name):''}</div>`;
+    if(this.state==='offline')return `<div class="coopSrv off">🔴 Сервер гри офлайн</div>`;
     return `<div class="coopSrv wait">⏳ Перевіряю сервер гри…</div>`;
   },
 };

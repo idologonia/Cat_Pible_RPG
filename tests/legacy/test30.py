@@ -41,18 +41,12 @@ with sync_playwright() as p:
     o=talk(B,'banker');check(any('сховище' in x for x in o),'скарбник доступний гостю')
     B.locator('#dlgBtns button',has_text='сховище').click();B.wait_for_timeout(300)
     check(B.evaluate("Game.panel")=='stash','сховище відкрилося');close(B)
-    # квестові пункти в розмові гостя замінено підказкою
+    # гість сам іде в Околиці й може брати завдання
     o=talk(B,'magpie');close(B)
-    A.evaluate("Game.changeLocation('outskirts',{x:40,y:40})");B.wait_for_timeout(2500)
+    A.evaluate("Game.changeLocation('outskirts',{x:40,y:40})");B.evaluate("Game.changeLocation('outskirts',{x:40.5,y:40})");B.wait_for_timeout(2600)
     o=talk(B,'elder');print('  Староста (гість):',o)
-    check(not any('Що тут сталося' in x for x in o) and any('Про завдання' in x for x in o),'у гостя замість квестових пунктів — підказка')
-    B.locator('#dlgBtns button',has_text='Про завдання').click();B.wait_for_timeout(200)
-    check('хост' in B.evaluate("document.querySelector('#dlgText')?.textContent||document.querySelector('#dialog').textContent"),'підказка пояснює, що завдання веде хост')
-    B.screenshot(path=SHOTS+'co25_elder.png');close(B)
-    check(B.evaluate("Quests.state('main')")=='none','гість не взяв завдання сам')
-    # двері, скрині й дошки — у хоста
-    st=B.evaluate("(()=>{const o=Game.world.objects.find(o=>o.interact&&!o.res&&!coopGuestObject(o));Game.interact(o);return Game.state})()")
-    check(st=='play','чужі обʼєкти світу гість не відкриває')
+    check(any('Що тут сталося' in x for x in o),'гість бачить пункти завдань')
+    B.screenshot(path=SHOTS+'co25_elder.png');close(B);B.wait_for_timeout(300)
     # спільна нагорода за завдання
     g0=B.evaluate("Game.heroData.gold");x0=B.evaluate("Game.heroData.xp+Game.heroData.level*1e6")
     A.evaluate("Quests.start('main');Quests.complete('main')");B.wait_for_timeout(600)
