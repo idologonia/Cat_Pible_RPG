@@ -65,6 +65,12 @@ with sync_playwright() as p:
     pot0=B.evaluate("Inv.count(Game.heroData,'hp_potion')")
     B.evaluate("(()=>{const g=Game.groundItems.find(g=>g.it.base==='hp_potion');Game.hero.x=g.x;Game.hero.y=g.y;Game.interact(g)})()");B.wait_for_timeout(600)
     check(B.evaluate("Inv.count(Game.heroData,'hp_potion')")==pot0+1 and A.evaluate("Game.groundItems.length")==0,'гість підібрав зілля')
+    # загубились вороги в копії (як при поганому зв'язку) — гра сама просить їх заново
+    B.evaluate("Net.mirrors=new Map();Game.combatants=[];Net._snapT=0")
+    for i in range(30):
+        B.wait_for_timeout(200)
+        if B.evaluate("Game.combatants.length")>0:break
+    check(B.evaluate("Game.combatants.length")==A.evaluate("Game.combatants.length"),'копія локації сама відновилась')
     # без паузи
     A.keyboard.press('Escape');A.wait_for_timeout(150);t0=A.evaluate("Game.flags.clock");A.wait_for_timeout(800)
     check(A.evaluate("Game.state")=='pause' and A.evaluate("Game.flags.clock")>t0,'пауза не зупиняє світ');A.keyboard.press('Escape')

@@ -8828,7 +8828,7 @@ const Net={
     const me=this.myLoc();
     switch(m.k){
       case 'st':this.onSt(m);return;
-      case 'snap':if(this._mirror&&m.loc===me&&m.from===this.authPid())this.applySnap(m);return;
+      case 'snap':if(this._mirror&&m.loc===me&&m.from===this.authPid()){this._snapT=performance.now();this.applySnap(m);}return;
       case 'need':if(m.loc===me&&this.isAuth()){const L=Game.combatants.filter(c=>m.all||(m.ids||[]).includes(c.nid)).map(c=>this.descOf(c)).filter(Boolean);this.toPid(m.from,{k:'ents',loc:me,ents:L,cleared:!!Game.world.cleared});}return;
       case 'ents':if(this._mirror&&m.loc===me){for(const D of m.ents)this.addMirror(D);if(m.cleared)Game.world.cleared=true;this.syncMirrorList();}return;
       case 'hit':if(m.loc===me&&this.isAuth())this.applyHit(m);return;
@@ -8872,7 +8872,7 @@ const Net={
     if(auth&&this._mirror)this.toAuth();else if(!auth&&!this._mirror)this.toMirror();
   },
   toMirror(){
-    this._mirror=true;this.mirrors=new Map();Game.combatants=[];Game.coins=[];Game.groundItems=[];Game.allies=[];Game.hazards=[];
+    this._mirror=true;this._snapT=performance.now();this.mirrors=new Map();Game.combatants=[];Game.coins=[];Game.groundItems=[];Game.allies=[];Game.hazards=[];
     this.toPid(this.authPid(),{k:'need',all:1,loc:this.myLoc()});
   },
   toAuth(){
@@ -8993,6 +8993,8 @@ const Net={
     }
     if(!Game.heroData||!Game.hero)return;
     this.checkMode();
+    // копія локації давно не оновлювалась (загубилось повідомлення) — просимо все заново
+    if(this._mirror&&now-(this._snapT||0)>3000&&now-(this._reqT||0)>3000&&this.others(this.myLoc()).length){this._reqT=now;this.toPid(this.authPid(),{k:'need',all:1,loc:this.myLoc()});}
     if(this._mirror){if(Game.combatants.some(c=>!c.mirror))this.syncMirrorList();if((Game.allies||[]).length)Game.allies=[];}
     else this.scaleEnemies();
     // розмова з мешканцем закінчилась — звільняємо його
