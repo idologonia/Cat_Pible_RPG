@@ -3,13 +3,26 @@
 Пересилає повідомлення між гравцями кімнати (WebSocket) і роздає саму гру.
 Потрібен лише Python 3.8+ — без додаткових пакетів.
 
-Запуск:  python coop-server.py            (порт 8787)
-         python coop-server.py 9000       (інший порт)
-Далі відкрий у браузері http://localhost:8787 — або дай друзям адресу тунелю (див. README.md поруч).
+Найпростіше — двічі клацнути start-server.bat (Windows): він усе підготує сам.
+Вручну:  python coop-server.py --public      сервер для всіх гравців: сам відкриває тунель Cloudflare
+                                             і повідомляє грі свою адресу (гра покаже «Сервер онлайн»)
+         python coop-server.py               лише локально, http://localhost:8787
+Параметри: --port 8787  --name "Сервер Ігоря"
 """
-import asyncio, base64, hashlib, json, os, pathlib, struct, sys, urllib.parse
+import argparse, asyncio, base64, hashlib, json, os, pathlib, platform, re, socket, struct, subprocess, sys, threading, time, urllib.parse, urllib.request
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8787
+ap = argparse.ArgumentParser(description='Сервер кооперативу CAT & PIBBLE RPG')
+ap.add_argument('port_pos', nargs='?', type=int, help=argparse.SUPPRESS)
+ap.add_argument('--port', type=int, default=8787)
+ap.add_argument('--public', action='store_true', help='відкрити тунель і оголосити сервер для всіх гравців')
+ap.add_argument('--name', default='Сервер гри')
+ap.add_argument('--announce-url', help=argparse.SUPPRESS)       # для тестів: оголосити цю адресу без тунелю
+ap.add_argument('--brokers', default='broker.hivemq.com:1883,broker.emqx.io:1883,test.mosquitto.org:1883')
+ap.add_argument('--ntfy', default='https://ntfy.sh/')
+ARGS = ap.parse_args()
+PORT = ARGS.port_pos or ARGS.port
+TOPIC_MQTT = 'catpibble-rpg/v1/main-server'   # має збігатися з CONFIG.coop.mainServer у грі
+TOPIC_NTFY = 'catpibble-rpg-v1-main-server'
 HERE = pathlib.Path(__file__).resolve().parent
 GAME = next((p for p in [HERE / 'cat-pibble-rpg.html', HERE.parent / 'cat-pibble-rpg.html'] if p.exists()), None)
 GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
@@ -59,7 +72,7 @@ async def pong(w, data):
 
 
 async def http_reply(w, code, ctype, body):
-    w.write(f'HTTP/1.1 {code}\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n'.encode() + body)
+    w.write(f'HTTP/1.1 {code}\r\nContent-Type: {ctype}\r\nContent-Length: {len(body)}\r\nCache-Control: no-cache\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n'.encode() + body)
     await w.drain()
     w.close()
 
@@ -81,7 +94,7 @@ async def handle(r, w):
         html = GAME.read_text(encoding='utf-8').replace('</head>', '<script>window.CPR_SERVER=location.origin</script></head>', 1)
         await http_reply(w, '200 OK', 'text/html; charset=utf-8', html.encode('utf-8'))
     elif url.path == '/health':
-        await http_reply(w, '200 OK', 'application/json', json.dumps({'ok': True, 'rooms': len(rooms)}).encode())
+        await http_reply(w, '200 OK', 'application/json', json.dumps({'ok': True, 'name': ARGS.name, 'rooms': len(rooms), 'players': sum(len(m) for m in rooms.values())}).encode())
     else:
         await http_reply(w, '404 Not Found', 'text/plain', b'not found')
 
@@ -136,13 +149,94 @@ async def websocket(r, w, hdr, q):
         except Exception: pass
 
 
+# ---------- Оголошення сервера: гра знаходить його адресу сама ----------
+def mqtt_publish(hostport, payload, retain=True):
+    host, port = hostport.rsplit(':', 1)
+    def mstr(b): return struct.pack('>H', len(b)) + b
+    def pkt(h, body):
+        n, rl = len(body), b''
+        while True:
+            d, n = n % 128, n // 128
+            rl += bytes([d | (128 if n else 0)])
+            if not n: break
+        return bytes([h]) + rl + body
+    with socket.create_connection((host, int(port)), timeout=8) as so:
+        so.sendall(pkt(0x10, mstr(b'MQTT') + bytes([4, 2, 0, 30]) + mstr(('cprsrv' + os.urandom(4).hex()).encode())))
+        ack = so.recv(4)
+        if len(ack) < 4 or ack[0] != 0x20 or ack[3] != 0: raise OSError('брокер відмовив')
+        so.sendall(pkt(0x31 if retain else 0x30, mstr(TOPIC_MQTT.encode()) + payload))
+        so.sendall(bytes([0xE0, 0]))
+
+def announce(url, online=True):
+    data = json.dumps({'app': 'cpr-server', 'url': url, 'online': online, 'name': ARGS.name, 't': int(time.time())}, ensure_ascii=False).encode()
+    ok = 0
+    for b in [x.strip() for x in ARGS.brokers.split(',') if x.strip()]:
+        try: mqtt_publish(b, data); ok += 1
+        except Exception: pass
+    if ARGS.ntfy:
+        try:
+            urllib.request.urlopen(urllib.request.Request(ARGS.ntfy.rstrip('/') + '/' + TOPIC_NTFY, data=data, method='POST'), timeout=8).read(); ok += 1
+        except Exception: pass
+    return ok
+
+def cloudflared_path():
+    sysname, arch = platform.system(), platform.machine().lower()
+    exe = HERE / ('cloudflared.exe' if sysname == 'Windows' else 'cloudflared')
+    if exe.exists(): return exe
+    name = {'Windows': 'cloudflared-windows-amd64.exe', 'Linux': 'cloudflared-linux-arm64' if 'arm' in arch or 'aarch' in arch else 'cloudflared-linux-amd64'}.get(sysname)
+    if not name:
+        print('На цій системі встанови cloudflared вручну: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/', flush=True); return None
+    print('Завантажую тунель Cloudflare (один раз, ~30 МБ)...', flush=True)
+    urllib.request.urlretrieve('https://github.com/cloudflare/cloudflared/releases/latest/download/' + name, exe)
+    if sysname != 'Windows': exe.chmod(0o755)
+    return exe
+
+def start_tunnel(on_url):
+    exe = cloudflared_path()
+    if not exe: return None
+    proc = subprocess.Popen([str(exe), 'tunnel', '--no-autoupdate', '--url', f'http://localhost:{PORT}'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='replace')
+    def reader():
+        found = False
+        for line in proc.stdout:
+            m = re.search(r'https://[-a-z0-9]+\.trycloudflare\.com', line)
+            if m and not found:
+                found = True; on_url(m.group(0))
+        print('Тунель зупинився.', flush=True)
+    threading.Thread(target=reader, daemon=True).start()
+    return proc
+
+PUBLIC = {'url': None}
+def go_public(url):
+    PUBLIC['url'] = url
+    time.sleep(3)  # даємо тунелю прогрітися
+    n = announce(url)
+    print(f'\n  СЕРВЕР ОНЛАЙН: {url}', flush=True)
+    print(f'  Гравці бачать його автоматично (оголошено, сервісів: {n}). Не закривай це вікно.\n' if n else '  Увага: не вдалося оголосити адресу — перевір інтернет.\n', flush=True)
+    def keep():
+        while PUBLIC['url'] == url:
+            time.sleep(600); announce(url)
+    threading.Thread(target=keep, daemon=True).start()
+
 async def main():
-    srv = await asyncio.start_server(handle, '0.0.0.0', PORT)
+    srv = await asyncio.start_server(handle, '127.0.0.1', PORT)   # лише цей ПК: назовні — через тунель (без запиту брандмауера)
     print(f'Сервер кооперативу працює: http://localhost:{PORT}', flush=True)
-    print('Друзям через інтернет дай адресу тунелю (див. README.md). Зупинити — Ctrl+C.', flush=True)
     if not GAME: print('Увага: не знайдено cat-pibble-rpg.html — гра з сервера не відкриється, але пересилання працює.', flush=True)
-    async with srv:
-        await srv.serve_forever()
+    tunnel = None
+    if ARGS.announce_url:
+        threading.Thread(target=go_public, args=(ARGS.announce_url,), daemon=True).start()
+    elif ARGS.public:
+        print('Відкриваю тунель в інтернет...', flush=True)
+        tunnel = start_tunnel(lambda u: threading.Thread(target=go_public, args=(u,), daemon=True).start())
+    else:
+        print('Лише локально. Щоб сервер бачили всі гравці — запусти з --public (або start-server.bat).', flush=True)
+    try:
+        async with srv:
+            await srv.serve_forever()
+    finally:
+        if PUBLIC['url']:
+            print('Повідомляю гравцям, що сервер офлайн...', flush=True)
+            announce(PUBLIC['url'], online=False); PUBLIC['url'] = None
+        if tunnel: tunnel.terminate()
 
 if __name__ == '__main__':
     try:

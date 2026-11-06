@@ -394,6 +394,8 @@ body.touch #safeTag{top:172px!important}
   .skTreeWrap{padding:6px}
 }
 /* ---------- Кооператив ---------- */
+.coopSrv{border:2px solid #3b2a20;border-radius:6px;padding:6px 8px;margin:4px 0 8px;font-weight:700;font-size:13px;line-height:1.4}
+.coopSrv.on{background:#d9f2c9}.coopSrv.off{background:#f5d6cc}.coopSrv.wait{background:#efe3c4}
 #coop{z-index:40}
 #coop .box{max-height:100%;overflow:auto;position:relative}
 #coop h2{padding-right:90px}
@@ -765,7 +767,7 @@ body.touch #bossBar{top:72px}body.touch #dungeonTag{top:72px}
     <div class="box panel" style="width:min(520px,100%)">
       <button class="btn small secondary closeX" id="btnCloseCoop">Закрити</button>
       <h2>Кооператив</h2>
-      <div class="invHint" style="text-align:left;margin-bottom:8px">Грайте разом до 4 гравців. Хост створює кімнату у своїй грі — світ, завдання й герої друзів зберігаються в його збереженні. Друзі приєднуються за кодом кімнати. Паузи в кооперативі немає.<br>Через інтернет гра йде напряму між браузерами (для знайомства — безкоштовні публічні сервіси). Деякі мережі, часто мобільний інтернет, блокують прямі з’єднання — тоді спробуйте Wi‑Fi або сервер на ПК хоста: з ним з’єднання найнадійніше.</div>
+      <div class="invHint" style="text-align:left;margin-bottom:8px">Грайте разом до 4 гравців. Хост створює кімнату у своїй грі — світ, завдання й герої друзів зберігаються в його збереженні. Друзі приєднуються за кодом кімнати. Паузи в кооперативі немає.<br>Коли сервер гри онлайн, гра йде через нього; коли офлайн — напряму між браузерами (між різними країнами чи через мобільний інтернет це може не спрацювати).</div>
       <div id="coopBody"></div>
     </div>
   </div>
@@ -1043,9 +1045,11 @@ const CONFIG = {
      iceServers — STUN/TURN-сервери для прямого з'єднання; сюди ж можна додати власний TURN (наприклад, на ПК хоста);
      fxPerPacket — скільки візуальних ефектів (кола, удари, спалахи) інших гравців пересилати за раз;
      questShare — яку частку досвіду й золота за завдання загону (його виконує хост) отримує кожен гість;
+     mainServer — де гра шукає адресу сервера гри (server/start-server.bat на ПК) і як часто перевіряє, чи він онлайн;
      xpRadius — у якому радіусі від убитого ворога герой отримує досвід; enemyHpPerPlayer — +здоров'я ворогам за кожного гравця понад одного */
   coop: { maxPlayers:4, sendHz:12, timeout:6, timeoutHidden:180, bgStep:0.05, bgMaxSteps:24, joinWait:4, joinWaitNet:25, helloRetry:3, iceWait:2.5,
     signalUrl:'https://ntfy.sh/', mqttUrls:['wss://broker.hivemq.com:8884/mqtt','wss://broker.emqx.io:8084/mqtt','wss://test.mosquitto.org:8081/mqtt'], iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}],
+    mainServer:{ mqttTopic:'catpibble-rpg/v1/main-server', ntfyTopic:'catpibble-rpg-v1-main-server', every:20, wait:4, allowAny:false },
     xpRadius:22, questShare:1, fxPerPacket:40, enemyHpPerPlayer:0.5, heroSaveEvery:5, flagsEvery:2, lerp:14, spawnSpread:1.2 },
 };
 
@@ -8578,8 +8582,8 @@ const Net={
       const L=this.isHost()&&m.from?{kind:'srv',send:x=>{x.to=m.from;if(ws.readyState===1)ws.send(JSON.stringify(x));},close(){}}:null;
       try{this.recv(m,L);}catch(e){console.error(e);}};
     ws.onclose=()=>{if(this.srv!==ws)return;const was=this.srvOk;this.srv=null;this.srvOk=false;
-      if(this.isHost()){this.sigOk=false;UI.toast('Зв’язок із сервером кооперативу втрачено.',3);this.renderPanel();}
-      else if(this.isGuest()){if(Game.heroData)this.hostGone('Зв’язок із сервером утрачено.');else{this.reset();this.msg(was?'Сервер закрив з’єднання.':'Не вдалося підключитися до сервера. Перевір адресу і чи він запущений.');}}};
+      if(this.isHost()){UI.toast('Зв’язок із сервером гри втрачено. Нові гравці приєднуються напряму.',3);this.renderPanel();}
+      else if(this.isGuest()){if(Game.heroData)this.hostGone('Зв’язок із сервером утрачено.');else if(!was&&this._viaMain){const n=this.name,c=this.room;MainServer.state='offline';MainServer.url=null;this.reset();this.join(n,c,'net');}else{this.reset();this.msg(was?'Сервер закрив з’єднання.':'Не вдалося підключитися до сервера. Перевір адресу і чи він запущений.');}}};
     return true;
   },
   /* Хост: гість з інтернету постукав — пропонуємо пряме з'єднання */
@@ -8623,8 +8627,8 @@ const Net={
     if(!Game.heroData||this.role)return;
     this.role='host';this.pid='host';this.room=coopCode();
     const local=this.open(this.room),base=coopServerBase();
-    if(base)this.sigOk=this.openServer(base,'host');
-    else this.sigOk=typeof RTCPeerConnection!=='undefined'&&Signal.sub(coopTopic(this.room),m=>this.hostSig(m),ok=>{this.sigOk=ok;this.renderPanel();});
+    if(base)this.openServer(base,'host');
+    this.sigOk=typeof RTCPeerConnection!=='undefined'&&Signal.sub(coopTopic(this.room),m=>this.hostSig(m),ok=>{this.sigOk=ok;this.renderPanel();});
     if(!local&&!this.sigOk){this.role=null;UI.toast('Браузер не підтримує кооператив.',3);return;}
     Game.flags.party=Game.flags.party||{};
     UI.toast(`Кімнату ${this.room} створено. Друзі приєднуються за цим кодом.`,3);
@@ -8746,7 +8750,7 @@ const Net={
       this.send({k:'hello',name});return;
     }
     const base=coopServerBase();
-    if(base){this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='srv';this.msg('Підключаюсь до сервера…');if(!this.openServer(base,this.pid)){this.reset();this.msg('Неправильна адреса сервера.');}return;}
+    if(base){this._viaMain=!window.CPR_SERVER&&!Store.get('cpr_coopServer');this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='srv';this.msg('Підключаюсь до сервера…');if(!this.openServer(base,this.pid)){this.reset();this.msg('Неправильна адреса сервера.');}return;}
     if(typeof RTCPeerConnection==='undefined'){this.reset();this.msg('Цей браузер не підтримує гру через інтернет.');return;}
     this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='net';this.msg('Шукаю кімнату в інтернеті…');
     let tries=0;const knock=()=>{if(!this.isGuest()||this.pcs.host||tries>=CONFIG.coop.helloRetry)return;tries++;Signal.pub({t:'hello',from:this.pid});setTimeout(knock,3000);};
@@ -8924,26 +8928,27 @@ const Net={
     const list=()=>'<ul class="coopList">'+[`<li>👑 ${esc(this.isHost()?Game.heroData.name:this._hostName||'Хост')} — хост</li>`,
       ...(this.isHost()?Object.values(this.peers).map(p=>`<li>${esc(p.r.name)} (${esc(p.name)}) · рівень ${p.r.level}${p.hidden?' · згорнув гру':''}</li>`):this.remotes.filter(r=>r.pid!=='host').map(r=>`<li>${esc(r.name)} · рівень ${r.level||'?'}</li>`))].join('')+'</ul>';
     const srvRow=`<div class="coopRow"><label>Сервер <input id="coopSrv" placeholder="необов’язково" autocomplete="off" style="width:220px;letter-spacing:0;text-transform:none;font-size:15px"></label></div>
-        <div class="invHint">Порожньо — гра з’єднує вас напряму. Якщо запущено сервер на ПК (папка server у грі), впиши його адресу.</div>`;
-    const bindSrv=()=>{const el=$('coopSrv');if(!el)return;el.value=coopServerBase();el.onkeydown=e=>e.stopPropagation();};
+        <div class="invHint">Зазвичай порожньо: сервер гри гра знаходить сама. Сюди — лише адреса іншого, власного сервера.</div>`;
+    const bindSrv=()=>{const el=$('coopSrv');if(!el)return;el.value=Store.get('cpr_coopServer')||'';el.onkeydown=e=>e.stopPropagation();};
     const saveSrv=()=>{const el=$('coopSrv');if(el)Store.set('cpr_coopServer',el.value.trim());};
+    const st=MainServer.statusHtml();
     if(this.isHost()){
-      b.innerHTML=`<div class="sectionT">Код кімнати</div><div class="coopCode">${this.room}</div>${list()}
-        <div class="invHint">${coopServerBase()?(this.sigOk?'🖥 Кімната на сервері '+esc(coopServerBase())+'.':'⚠ Сервер '+esc(coopServerBase())+' не відповідає.'):this.sigOk?'🌐 Кімната відкрита в інтернеті.':'⚠ Інтернет-кімната недоступна (немає зв’язку із сервісом знайомства) — приєднатися можна лише з іншої вкладки цього браузера.'}<br>Друг відкриває гру, «Кооператив» у головному меню → ім’я → цей код → «Через інтернет» (або «З іншої вкладки», якщо грає на цьому ж пристрої).</div>
+      b.innerHTML=st+`<div class="sectionT">Код кімнати</div><div class="coopCode">${this.room}</div>${list()}
+        <div class="invHint">${this.srvOk?'🖥 Кімната також на сервері гри — друзі з будь-якої країни підключаться через нього.<br>':''}${this.sigOk?'🌐 Кімната відкрита в інтернеті.':'⚠ Інтернет-кімната недоступна (немає зв’язку із сервісом знайомства) — приєднатися можна лише з іншої вкладки цього браузера.'}<br>Друг відкриває гру, «Кооператив» у головному меню → ім’я → цей код → «Через інтернет» (або «З іншої вкладки», якщо грає на цьому ж пристрої).</div>
         <div class="coopRow"><button class="btn small secondary" id="btnCoopClose">Закрити кімнату</button></div>`;
       $('btnCoopClose').onclick=()=>this.closeRoom();
     }else if(this.isGuest()&&Game.heroData){
-      b.innerHTML=`<div class="sectionT">Ти в кімнаті ${esc(this.room)}</div>${list()}
+      b.innerHTML=st+`<div class="sectionT">Ти в кімнаті ${esc(this.room)}</div>${list()}
         <div class="invHint">Твій герой зберігається в грі хоста. Ти можеш торгувати, користуватися ковалем, алхімією, сховищем і збирати ресурси. Завдання, контракти, двері й переходи веде хост, а нагороду за завдання отримує весь загін.</div>
         <div class="coopRow"><button class="btn small secondary" id="btnCoopLeave">Вийти з кімнати</button></div>`;
       $('btnCoopLeave').onclick=()=>this.leave();
     }else if(this._from==='game'){
-      b.innerHTML=`<div class="invHint">Створи кімнату — і друзі зможуть приєднатися до твого світу. Приєднатися до чужої кімнати можна з головного меню.</div>
+      b.innerHTML=st+`<div class="invHint">Створи кімнату — і друзі зможуть приєднатися до твого світу. Приєднатися до чужої кімнати можна з головного меню.</div>
         ${srvRow}
         <div class="coopRow"><button class="btn" id="btnCoopHost">Створити кімнату</button></div>`;
-      bindSrv();$('btnCoopHost').onclick=()=>{saveSrv();this.hostRoom();};
+      bindSrv();$('btnCoopHost').onclick=()=>{saveSrv();this.hostRoom();MainServer.check(false);};
     }else{
-      b.innerHTML=`<div class="sectionT">Приєднатися до кімнати</div>
+      b.innerHTML=st+`<div class="sectionT">Приєднатися до кімнати</div>
         <div class="coopRow"><label>Ім’я гравця <input id="coopName" maxlength="16" style="width:170px;letter-spacing:0;text-transform:none"></label></div>
         <div class="coopRow"><label>Код <input id="coopCodeIn" maxlength="4" autocomplete="off"></label></div>
         ${srvRow}
@@ -8951,7 +8956,7 @@ const Net={
         <div class="coopMsg" id="coopMsg"></div>
         <div class="invHint">За ім’ям хост упізнає твого героя наступного разу.</div>`;
       $('coopName').value=Store.get('cpr_coopName')||'';
-      bindSrv();$('btnCoopJoin').onclick=()=>{saveSrv();this.join($('coopName').value,$('coopCodeIn').value,'net');};
+      bindSrv();$('btnCoopJoin').onclick=async()=>{saveSrv();if(!window.CPR_SERVER&&!Store.get('cpr_coopServer')){this.msg('Перевіряю сервер гри…');await MainServer.check(false);}this.join($('coopName').value,$('coopCodeIn').value,'net');};
       $('btnCoopJoinLocal').onclick=()=>this.join($('coopName').value,$('coopCodeIn').value,'local');
       $('coopCodeIn').onkeydown=e=>{e.stopPropagation();if(e.key==='Enter')$('btnCoopJoin').click();};
       $('coopName').onkeydown=e=>e.stopPropagation();
@@ -9207,6 +9212,62 @@ function installWeaponAnimHooks(){
   };
 }
 
+/* ===================== ЕТАП 28: СЕРВЕР ГРИ НА ПК (ОНЛАЙН / ОФЛАЙН) ===================== */
+/* server/start-server.bat на ПК запускає сервер, відкриває тунель і оголошує адресу через MQTT (останнє повідомлення
+   зберігається на брокері) і ntfy. Гра сама знаходить адресу, перевіряє /health і показує, чи сервер онлайн.
+   Поки сервер онлайн, кімнати йдуть через нього (працює між будь-якими мережами й країнами); інакше — напряму. */
+const MainServer={state:'unknown',url:null,name:'',players:0,_t:-1e9,_p:null,
+  okUrl(u){return typeof u==='string'&&(/^https:\/\/[-a-z0-9]+\.trycloudflare\.com\/?$/i.test(u)||(CONFIG.coop.mainServer.allowAny&&/^https?:\/\/\S+$/.test(u)));},
+  check(force){
+    if(this._p)return this._p;
+    if(!force&&performance.now()-this._t<CONFIG.coop.mainServer.every*1000)return Promise.resolve(this.state);
+    if(this.state==='unknown')this.state='checking';
+    this._p=(async()=>{
+      try{const a=await this.discover();
+        if(!a||!a.online||!this.okUrl(a.url)){this.state='offline';this.url=null;}
+        else{const h=await this.ping(a.url);this.state=h?'online':'offline';this.url=h?a.url.replace(/\/+$/,''):null;this.name=a.name||'';this.players=h&&h.players||0;}}
+      catch(e){this.state='offline';this.url=null;}
+      finally{this._t=performance.now();this._p=null;
+        // хост уже відкрив кімнату, а сервер гри щойно знайшовся — підключаємо кімнату й до нього
+        if(Net.isHost()&&!Net.srv&&coopServerBase())Net.openServer(coopServerBase(),'host');
+        Net.renderPanel();}
+      return this.state;})();
+    Net.renderPanel();return this._p;
+  },
+  discover(){
+    const M=CONFIG.coop.mainServer;
+    return new Promise(res=>{
+      let best=null,done=false,links=[],early=null;
+      const take=a=>{if(a&&a.app==='cpr-server'&&(!best||(a.t||0)>(best.t||0)))best=a;if(best&&!early)early=setTimeout(fin,1200);};
+      const fin=()=>{if(done)return;done=true;clearTimeout(T);clearTimeout(early);for(const l of links)l.close();res(best);};
+      const T=setTimeout(fin,M.wait*1000);
+      // закінчуємо, щойно відповіли всі джерела (брокер віддає збережене повідомлення одразу після підписки)
+      const mq=typeof WebSocket!=='undefined'?(CONFIG.coop.mqttUrls||[]):[];let pending=mq.length+(CONFIG.coop.signalUrl?1:0);
+      const one=()=>{if(--pending<=0)setTimeout(fin,50);};if(!pending){setTimeout(fin,0);}
+      for(const u of mq){let d=false;const once=()=>{if(!d){d=true;one();}};
+        links.push(new MqttLink(u,M.mqttTopic,t=>{try{take(JSON.parse(t));}catch(e){}},ok=>{if(ok)setTimeout(once,1000);else once();}));}
+      if(CONFIG.coop.signalUrl)fetch(CONFIG.coop.signalUrl.replace(/\/?$/,'/')+M.ntfyTopic+'/json?poll=1&since=24h',{cache:'no-store'}).then(r=>r.text()).then(t=>{
+        for(const line of t.split('\n')){try{const d=JSON.parse(line);if(d.event==='message')take(JSON.parse(d.message));}catch(e){}}}).catch(()=>{}).finally(one);
+    });
+  },
+  ping(url){
+    const ac=typeof AbortController!=='undefined'?new AbortController():null,t=setTimeout(()=>ac&&ac.abort(),CONFIG.coop.mainServer.wait*1000);
+    return fetch(url.replace(/\/+$/,'')+'/health',{cache:'no-store',signal:ac&&ac.signal}).then(r=>r.ok?r.json():null).catch(()=>null).finally(()=>clearTimeout(t));
+  },
+  statusHtml(){
+    const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    if(window.CPR_SERVER||Store.get('cpr_coopServer'))return `<div class="coopSrv wait">🖥 Використовується власний сервер: ${esc(window.CPR_SERVER||Store.get('cpr_coopServer'))}</div>`;
+    if(this.state==='online')return `<div class="coopSrv on">🟢 Сервер гри онлайн${this.name&&this.name!=='Сервер гри'?' — '+esc(this.name):''}. Гра йде через нього — працює між будь-якими мережами й країнами.</div>`;
+    if(this.state==='offline')return `<div class="coopSrv off">🔴 Сервер гри офлайн. Гравці з’єднуються напряму — між різними країнами чи через мобільний інтернет це може не спрацювати.</div>`;
+    return `<div class="coopSrv wait">⏳ Перевіряю сервер гри…</div>`;
+  },
+};
+{const f=coopServerBase;coopServerBase=function(){return f()||(MainServer.state==='online'&&MainServer.url)||'';};}
+function installMainServerHooks(){
+  {const f=Net.openPanel;Net.openPanel=function(){f.call(this);MainServer.check(false);};}
+  setInterval(()=>{if(!$('coop').classList.contains('hidden'))MainServer.check(false);},3000);
+}
+
 /* ---------- Вступ ---------- */
 const INTRO = [
   {text:'Далеко за Молочними пагорбами, серед теплих полів і затишних сіл, жили котики та їхні вірні друзі — піблики.',scene:0},
@@ -9246,7 +9307,7 @@ const Game = {
   shops:{}, timers:[], traps:[], npcs:[], combatants:[], projectiles:[], zones:[], vfx:[], floatTexts:[], groundItems:[], coins:[], shake:0,
   introI:0, menuCamT:0, talkCooldown:0, wasSafe:false,
   init(){
-    Render.init();Input.init();installAudioHooks();installMetaHooks();installTavernHooks();installCoopHooks();installCoopPeaceHooks();installCoopFxHooks();installWeaponAnimHooks();
+    Render.init();Input.init();installAudioHooks();installMetaHooks();installTavernHooks();installCoopHooks();installCoopPeaceHooks();installCoopFxHooks();installWeaponAnimHooks();installMainServerHooks();
     this.loadLocation('outskirts');
     this.bindUI();bindAudioUI();bindSaveIO();
     this.drawMenuHeroes();
