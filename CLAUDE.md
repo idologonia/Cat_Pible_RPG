@@ -28,7 +28,7 @@
 | `ЗБЕРЕЖЕННЯ` | `SaveSys` (localStorage `cpr_save_N`, `serialize`, `migrate`), `requestAutosave(why)` |
 | `КВЕСТИ` | `QUESTS`, `Quests` (`emit`, `advance`, `step`, `target`, `state`) |
 | далі | дерева навичок, місто (коваль, алхімія, сховище, дошка), зв'язки локацій і світова мапа (`LINKS`, `WORLD_NODES`, `TRAVEL_POINTS`, `nextHop`) |
-| `ЕТАП 12 … ЕТАП 26` | кожен пізній етап — окремим блоком (див. `docs/CHANGELOG.md`) |
+| `ЕТАП 12 … ЕТАП 27` | кожен пізній етап — окремим блоком (див. `docs/CHANGELOG.md`) |
 | `ЗВУК І МУЗИКА` | `AudioSys` (Web Audio-синтез), `MUSIC`, `SFX`, `trackFor(loc)` |
 | `10. ГРА` | `const Game = {…}`: `init`, `loadLocation`, `changeLocation`, головний цикл, бій, смерть |
 
@@ -43,6 +43,7 @@
 - **Дошки контрактів**: `boardState(id)`, `genOffer(bid)`, `takeContract`, `finishContract`. Ідентифікатори дошок: `city` → `board`, `village` → `vboard`, `tavern` → `tboard`.
 - **Союзники**: `Ally` / `Guard` / `Escortee` (extends `Critter`). Вороги б'ють союзників через `Game._aiTarget`.
 - **Звук**: `AudioSys.play('name')`, нові ефекти додаються в `SFX`, музика — в `MUSIC`.
+- **Анімація зброї** (етап 27): `startWeaponAnim(h,skill)` ставить `h.atkAnim`; `Render.drawCritter` під час неї малює героя з `look` без зброї й домальовує зброю `drawWeaponAnim` (поворот спрайта `weaponOverlaySprite`, лук — лініями). У кооперативі номер і вид атаки — поля 16–17 `heroTuple`.
 - **Спрайти** завжди кешуються через `cachedSprite` з унікальним ключем. Кольори — піксель-арт-палітра, контур `OUTLINE`.
 
 ### Кооператив (етап 23, блок `ЕТАП 23: КООПЕРАТИВ`)
@@ -59,7 +60,7 @@
 - Гість (етап 25, блок `ЕТАП 25: ГОСТІ В МИРНОМУ ЖИТТІ`): розмовляє з мешканцями (пункти `QUEST_TALK` замінено підказкою, крім `kind:'shop'`; повністю — для `COOP_GUEST_TALK_OK`), торгує, коваль, алхімія, сховище, ресурсні вузли (`coopGuestObject`). Нагорода за `Quests.complete` у хоста → `qdone` кожному гостю (`questShare`). Досягнення гостя — у `heroData.coopAch`.
 - Ефекти (етап 26): нові `Game.vfx`, зони (без `spec`) і `spawnBurst` збираються `coopTakeFx()` і йдуть іншим гравцям (`fx` у знімку хоста й у стані гостя), застосовуються `coopApplyFx()` з позначкою `_n` (щоб не ходили по колу). `follow` не пересилається. Інші гравці на мінікарті — обгортка `Render.drawMinimap`.
 - У гостя вимкнено: збереження, переходи між локаціями, двері / скрині / дошки контрактів, кімнату в корчмі, події в дорозі, набіги, власних союзників, зміни завдань.
-- Тести: `tests/legacy/test27.py` (дві вкладки одного браузера), `tests/legacy/test28.py` (WebRTC між різними профілями; знайомство через локальну імітацію `tests/ntfy_mock.py`), `tests/legacy/test29.py` (через сервер на ПК), `tests/legacy/test30.py` (мирне життя гостя), `tests/legacy/test31.py` (ефекти й мінікарта).
+- Тести: `tests/legacy/test27.py` (дві вкладки одного браузера), `tests/legacy/test28.py` (WebRTC між різними профілями; знайомство через локальну імітацію `tests/ntfy_mock.py`), `tests/legacy/test29.py` (через сервер на ПК), `tests/legacy/test30.py` (мирне життя гостя), `tests/legacy/test31.py` (ефекти й мінікарта), `tests/legacy/test32.py` (анімація зброї).
 
 ## Перевірка після кожної зміни
 
@@ -83,5 +84,5 @@ python tests/run_all.py test22      # лише один тест
 
 ## Документи
 
-- `docs/CHANGELOG.md` — що зроблено в етапах 1–26.
+- `docs/CHANGELOG.md` — що зроблено в етапах 1–27.
 - `docs/IDEAS.md` — ідеї, які обговорювали, і можливі наступні кроки.

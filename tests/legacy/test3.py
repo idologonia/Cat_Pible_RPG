@@ -43,7 +43,7 @@ with sync_playwright() as p:
     pg.keyboard.press('Digit4'); pg.wait_for_timeout(350); pg.screenshot(path=S+'k2_whirl.png'); pg.wait_for_timeout(600)
     print('whirl',hp(pg), 'buffs',pg.evaluate('JSON.stringify(Game.hero.buffs)'))
     # crossbow + block
-    pg.evaluate('Game.hero.x=45.6;Game.hero.y=31.0'); pg.wait_for_timeout(200)
+    pg.evaluate('(()=>{const o=Game.world.turrets[0];Game.hero.x=o.x-0.9;Game.hero.y=o.y-0.7;})()'); pg.wait_for_timeout(200)
     print('interact target',pg.evaluate('Game.interactTarget&&Game.interactTarget.kind'))
     pg.keyboard.press('KeyE'); pg.wait_for_timeout(100)
     pg.evaluate('Game.hero.x=42.0;Game.hero.y=29.0;Game.heroData.hp=Game.derived.maxHp')
