@@ -1038,11 +1038,12 @@ const CONFIG = {
      signalUrl, mqttUrls — публічні сервіси для знайомства гравців через інтернет; працюють одночасно, досить будь-якого одного
      (сама гра йде напряму між браузерами, WebRTC);
      iceServers — STUN/TURN-сервери для прямого з'єднання; сюди ж можна додати власний TURN (наприклад, на ПК хоста);
+     fxPerPacket — скільки візуальних ефектів (кола, удари, спалахи) інших гравців пересилати за раз;
      questShare — яку частку досвіду й золота за завдання загону (його виконує хост) отримує кожен гість;
      xpRadius — у якому радіусі від убитого ворога герой отримує досвід; enemyHpPerPlayer — +здоров'я ворогам за кожного гравця понад одного */
   coop: { maxPlayers:4, sendHz:12, timeout:6, timeoutHidden:180, bgStep:0.05, bgMaxSteps:24, joinWait:4, joinWaitNet:25, helloRetry:3, iceWait:2.5,
     signalUrl:'https://ntfy.sh/', mqttUrls:['wss://broker.hivemq.com:8884/mqtt','wss://broker.emqx.io:8084/mqtt','wss://test.mosquitto.org:8081/mqtt'], iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}],
-    xpRadius:22, questShare:1, enemyHpPerPlayer:0.5, heroSaveEvery:5, flagsEvery:2, lerp:14, spawnSpread:1.2 },
+    xpRadius:22, questShare:1, fxPerPacket:40, enemyHpPerPlayer:0.5, heroSaveEvery:5, flagsEvery:2, lerp:14, spawnSpread:1.2 },
 };
 
 /* ===================== 2. ДАНІ ===================== */
@@ -8678,7 +8679,7 @@ const Net={
     }
     if(!p)return;
     switch(m.k){
-      case 'st':{const r=p.r;this.applyHero(r,m.h,dtNow());if(m.lk)r.look=m.lk;r.name=m.nm||r.name;p.proj=m.pj||[];return;}
+      case 'st':{const r=p.r;if(m.fx&&m.fx.length){coopApplyFx(m.fx);(this._relay||(this._relay=[])).push(...m.fx.map(f=>[m.from,f]));}this.applyHero(r,m.h,dtNow());if(m.lk)r.look=m.lk;r.name=m.nm||r.name;p.proj=m.pj||[];return;}
       case 'hd':this.storeHd(p,m.hd);return;
       case 'hit':this.applyHit(m);return;
       case 'pick':{const i=Game.coins.findIndex(c=>c.nid===m.id);if(i<0)return;const c=Game.coins[i];Game.coins.splice(i,1);this.to(m.from,{k:'gold',a:c.amount});return;}
@@ -8720,7 +8721,8 @@ const Net={
       return [this.nidOf(c),+c.x.toFixed(2),+c.y.toFixed(2),Math.ceil(c.hp),c.maxHp,c.dir||'down',c.flip?1:0,c.moving?1:0,c.dead?1:0,c.wind?1:0,c.strikeT>0?1:0,st,c.hurtT>0?1:0,c.enraged?1:0,c.state==='fight'?1:0];});
     const proj=G.projectiles.map(p=>projTuple(p,'host'));
     for(const pid in this.peers)for(const q of this.peers[pid].proj)proj.push([...q.slice(0,7),pid]);
-    return {k:'snap',t:G.flags.clock,w:G.weather?[G.weather.type,+G.weather.k.toFixed(2)]:null,heroes,looks,e,proj,
+    const fx=coopTakeFx().map(f=>['host',f]).concat(this._relay||[]);this._relay=[];
+    return {k:'snap',fx,t:G.flags.clock,w:G.weather?[G.weather.type,+G.weather.k.toFixed(2)]:null,heroes,looks,e,proj,
       c:G.coins.map(c=>[this.nidOf(c),+c.x.toFixed(2),+c.y.toFixed(2),Math.round(c.z)]),
       g:G.groundItems.map(g=>[this.nidOf(g),+g.x.toFixed(2),+g.y.toFixed(2),Math.round(g.z),g.it]),
       a:(G.allies||[]).map(a=>[+a.x.toFixed(2),+a.y.toFixed(2),a.dir,a.flip?1:0,a.moving?1:0,+(a.anim||0).toFixed(2),a.downed?1:0,a.name,a.look,a.isGuard?1:0]),
@@ -8820,6 +8822,7 @@ const Net={
     if(m.t!=null&&G.flags)G.flags.clock=m.t;
     if(m.w){G.weather=G.weather||{};Object.assign(G.weather,{type:m.w[0],k:m.w[1],until:G.time+1e9,loc:G.locationId});}
     if(G._traveling||G.state==='travel')return;
+    if(m.fx&&m.fx.length)coopApplyFx(m.fx.filter(x=>x[0]!==this.pid).map(x=>x[1]));
     // герої
     const seen=new Set();
     for(const [pid,name,t] of m.heroes){if(pid===this.pid)continue;seen.add(pid);
@@ -8854,7 +8857,7 @@ const Net={
   },
   onKill(id){
     const e=this.mirrors.get(id);if(!e)return;
-    if(!e.dead){e.dead=true;e.deadT=0;if(e.isEnemy&&e.look){spawnBurst(e.x,e.y,14,e.look.c1,10,1.8);}}
+    if(!e.dead){e.dead=true;e.deadT=0;}
     const h=Game.hero;if(!e.isEnemy||!h||h.dead||e._xp)return;e._xp=true;
     if(Math.hypot(h.x-e.x,h.y-e.y)>CONFIG.coop.xpRadius)return;
     gainXp(enemyXp(e));
@@ -8895,6 +8898,7 @@ const Net={
       const G=Game,h=G.hero,hd=G.heroData;if(G.state==='travel'||G._traveling)return;
       const m={k:'st',h:heroTuple(h,hd,G.derived),nm:hd.name,pj:G.projectiles.filter(p=>p.owner==='hero').map(p=>projTuple(p,this.pid).slice(0,7))};
       if(this._lookT<=0){this._lookT=2;m.lk=h.look;}
+      const fx=coopTakeFx();if(fx.length)m.fx=fx;
       this.send(m);
       this._hdT-=1/C.sendHz;if(this._hdT<=0){this._hdT=C.heroSaveEvery;const j=JSON.stringify(hd);if(j!==this._hdJson){this._hdJson=j;this.send({k:'hd',hd:coopClone(hd)});}}
       if(!h.dead)for(const c of G.coins)if(Math.hypot(c.x-h.x,c.y-h.y)<CONFIG.loot.coinMagnet){const t=(this._pickT||(this._pickT={}));if(now-(t[c.nid]||0)>600){t[c.nid]=now;this.send({k:'pick',id:c.nid});}}
@@ -9108,6 +9112,36 @@ function coopQuestReward(m){
   UI.updateHUD();
 }
 
+/* ===================== ЕТАП 26: КООПЕРАТИВ — ЕФЕКТИ ІНШИХ ГРАВЦІВ, МІНІКАРТА ===================== */
+/* Візуальні ефекти (Game.vfx: кола, удари, блискавки; зони навичок без бойової частини; спалахи частинок)
+   пересилаються іншим гравцям — так видно навички друзів і замахи ворогів. На бій вони не впливають. */
+const COOP_ZONE_KEYS=['kind','x','y','r','dur'];
+function coopNum(v){return typeof v==='number'?Math.round(v*100)/100:v;}
+function coopTakeFx(){
+  const out=[],G=Game;if(!Net.live())return out;
+  for(const v of G.vfx){if(v._n)continue;v._n=1;const o={};for(const k in v)if(k!=='t'&&k!=='_n'&&k!=='follow')o[k]=Array.isArray(v[k])?v[k].map(a=>Array.isArray(a)?a.map(coopNum):coopNum(a)):coopNum(v[k]);out.push(['v',o]);}
+  for(const z of G.zones){if(z._n)continue;z._n=1;const o={};for(const k of COOP_ZONE_KEYS)if(z[k]!=null)o[k]=coopNum(z[k]);out.push(['z',o]);}
+  for(const b of Net._bursts||[])out.push(['b',b]);Net._bursts=[];
+  return out.slice(-CONFIG.coop.fxPerPacket);
+}
+function coopApplyFx(list){
+  const G=Game;Net._fxIn=true;
+  try{for(const [k,o] of list){
+    if(k==='v')G.vfx.push({...o,t:0,_n:1});
+    else if(k==='z')G.zones.push({...o,t:0,next:99,_n:1});
+    else if(k==='b'&&Array.isArray(o))spawnBurst(...o);}}
+  catch(e){console.error(e);}finally{Net._fxIn=false;}
+}
+{const _b=spawnBurst;spawnBurst=function(...a){_b(...a);if(!Net._fxIn&&Net.live()){const q=Net._bursts||(Net._bursts=[]);if(q.length<CONFIG.coop.fxPerPacket)q.push(a.map(coopNum));}};}
+function installCoopFxHooks(){
+  // інші гравці на мінікарті — блакитні крапки
+  const f=Render.drawMinimap;Render.drawMinimap=function(){
+    f.call(this);if(!Net.role||!Net.remotes.length)return;
+    const W=Game.world,c=$('minimap').getContext('2d'),k=W.minimapScale,pt=(x,y)=>[(W.groundOX+(x-y)*16)*k,((x+y)*8)*k];
+    for(const r of Net.remotes){const [x,y]=pt(r.x,r.y);c.fillStyle=r.dead?'#8a8a9a':'#7fd6ff';c.beginPath();c.arc(x,y,2.6,0,Math.PI*2);c.fill();c.strokeStyle='#1d2a3a';c.lineWidth=1.2;c.stroke();}
+  };
+}
+
 /* ---------- Вступ ---------- */
 const INTRO = [
   {text:'Далеко за Молочними пагорбами, серед теплих полів і затишних сіл, жили котики та їхні вірні друзі — піблики.',scene:0},
@@ -9147,7 +9181,7 @@ const Game = {
   shops:{}, timers:[], traps:[], npcs:[], combatants:[], projectiles:[], zones:[], vfx:[], floatTexts:[], groundItems:[], coins:[], shake:0,
   introI:0, menuCamT:0, talkCooldown:0, wasSafe:false,
   init(){
-    Render.init();Input.init();installAudioHooks();installMetaHooks();installTavernHooks();installCoopHooks();installCoopPeaceHooks();
+    Render.init();Input.init();installAudioHooks();installMetaHooks();installTavernHooks();installCoopHooks();installCoopPeaceHooks();installCoopFxHooks();
     this.loadLocation('outskirts');
     this.bindUI();bindAudioUI();bindSaveIO();
     this.drawMenuHeroes();
