@@ -113,7 +113,7 @@ async def websocket(r, w, hdr, q):
     if cid == 'host' and 'host' in members:
         await me.send(json.dumps({'k': 'nope', 'msg': 'Кімната з таким кодом уже є на сервері.'})); w.close(); return
     if cid != 'host' and 'host' not in members:
-        await me.send(json.dumps({'k': 'nope', 'msg': 'Кімнату не знайдено на сервері. Перевір код.'})); w.close(); return
+        await me.send(json.dumps({'k': 'nope', 'code': 'noroom', 'msg': 'Кімнату не знайдено на сервері. Перевір код.'})); w.close(); return
     members[cid] = me
     print(f'[{room}] + {cid} (у кімнаті: {len(members)})', flush=True)
     try:

@@ -1047,10 +1047,11 @@ const CONFIG = {
      fxPerPacket — скільки візуальних ефектів (кола, удари, спалахи) інших гравців пересилати за раз;
      questShare — яку частку досвіду й золота за завдання загону (його виконує хост) отримує кожен гість;
      mainServer — де гра шукає адресу сервера гри (server/start-server.bat на ПК) і як часто перевіряє, чи він онлайн;
+     fresh — скільки секунд оголошення вважається свіжим (сервер онлайн, хоч цей пристрій до нього й не достукався);
      xpRadius — у якому радіусі від убитого ворога герой отримує досвід; enemyHpPerPlayer — +здоров'я ворогам за кожного гравця понад одного */
   coop: { maxPlayers:4, sendHz:12, timeout:6, timeoutHidden:180, bgStep:0.05, bgMaxSteps:24, joinWait:4, joinWaitNet:25, helloRetry:3, iceWait:2.5,
     signalUrl:'https://ntfy.sh/', mqttUrls:['wss://broker.hivemq.com:8884/mqtt','wss://broker.emqx.io:8084/mqtt','wss://test.mosquitto.org:8081/mqtt'], iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}],
-    mainServer:{ mqttTopic:'catpibble-rpg/v1/main-server', ntfyTopic:'catpibble-rpg-v1-main-server', every:20, wait:4, allowAny:false },
+    mainServer:{ mqttTopic:'catpibble-rpg/v1/main-server', ntfyTopic:'catpibble-rpg-v1-main-server', every:20, wait:4, fresh:900, allowAny:false },
     xpRadius:22, questShare:1, fxPerPacket:40, talkLock:20, enemyHpPerPlayer:0.5, heroSaveEvery:5, flagsEvery:2, lerp:14, spawnSpread:1.2 },
 };
 
@@ -8739,7 +8740,8 @@ const Net={
       this.send({k:'hello',name});return;
     }
     const base=coopServerBase();
-    if(base){this._viaMain=!window.CPR_SERVER;this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='srv';this.msg('Підключаюсь…');if(!this.openServer(base,this.pid)){this.reset();this.msg('Неправильна адреса сервера.');}return;}
+    const direct=this._direct;this._direct=false;
+    if(base&&!direct){this._viaMain=!window.CPR_SERVER;this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='srv';this.msg('Підключаюсь…');if(!this.openServer(base,this.pid)){this.reset();this.msg('Неправильна адреса сервера.');}return;}
     if(typeof RTCPeerConnection==='undefined'){this.reset();this.msg('Цей браузер не підтримує гру через інтернет.');return;}
     this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='net';this.msg('Шукаю кімнату…');
     let tries=0;const knock=()=>{if(!this.isGuest()||this.pcs.host||tries>=CONFIG.coop.helloRetry)return;tries++;Signal.pub({t:'hello',from:this.pid});setTimeout(knock,3000);};
@@ -8761,7 +8763,8 @@ const Net={
   onGuest(m){
     this._lastHost=performance.now();
     switch(m.k){
-      case 'nope':this.reset();this.msg(m.msg);if(Game.state==='create'){UI.hide('create');UI.show('menu');Game.state='menu';this.openPanel();this.msg(m.msg);}return;
+      case 'nope':if(this._joinMode==='srv'&&!Game.heroData&&(m.code==='noroom'||/не знайдено/.test(m.msg||''))){const n=this.name,c=this.room;this.reset();this._direct=true;this.msg('Шукаю кімнату напряму…');this.join(n,c,'net');return;}
+        this.reset();this.msg(m.msg);if(Game.state==='create'){UI.hide('create');UI.show('menu');Game.state='menu';this.openPanel();this.msg(m.msg);}return;
       case 'newHero':
         this._joinT=0;this._creating=true;UI.hide('coop');UI.hide('menu');UI.openCreate();
         UI.toast('Створи героя — він зберігатиметься в грі хоста.',3);return;
@@ -9282,7 +9285,8 @@ const MainServer={state:'unknown',url:null,name:'',players:0,_t:-1e9,_p:null,
     this._p=(async()=>{
       try{const a=window.CPR_SERVER?{app:'cpr-server',online:true,url:window.CPR_SERVER,name:''}:await this.discover();
         if(!a||!a.online||!this.okUrl(a.url)){this.state='offline';this.url=null;}
-        else{const h=await this.ping(a.url);this.state=h?'online':'offline';this.url=h?a.url.replace(/\/+$/,''):null;this.name=a.name||'';this.players=h&&h.players||0;}}
+        else{let h=await this.ping(a.url);if(!h){await new Promise(r=>setTimeout(r,1500));h=await this.ping(a.url);}
+          const fresh=!window.CPR_SERVER&&Date.now()/1000-(a.t||0)<CONFIG.coop.mainServer.fresh;this.state=h?'online':fresh?'blocked':'offline';this.blockedUrl=h?null:a.url;this.url=h?a.url.replace(/\/+$/,''):null;this.name=a.name||'';this.players=h&&h.players||0;}}
       catch(e){this.state='offline';this.url=null;}
       finally{this._t=performance.now();this._p=null;
         // хост уже відкрив кімнату, а сервер гри щойно знайшовся — підключаємо кімнату й до нього
@@ -9315,6 +9319,7 @@ const MainServer={state:'unknown',url:null,name:'',players:0,_t:-1e9,_p:null,
     const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
     if(this.state==='online')return `<div class="coopSrv on">🟢 Сервер гри онлайн${this.name&&this.name!=='Сервер гри'?' — '+esc(this.name):''}</div>`;
     if(this.state==='offline')return `<div class="coopSrv off">🔴 Сервер гри офлайн</div>`;
+    if(this.state==='blocked')return `<div class="coopSrv wait">🟠 Сервер гри онлайн, але цей пристрій до нього не достукається — часто так блокує антивірус чи мережа. <a href="${esc(this.blockedUrl)}/health" target="_blank" rel="noopener">Перевірити</a></div>`;
     return `<div class="coopSrv wait">⏳ Перевіряю сервер гри…</div>`;
   },
 };
