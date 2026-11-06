@@ -48,7 +48,8 @@
 ### Кооператив (етап 23, блок `ЕТАП 23: КООПЕРАТИВ`)
 
 - `Net` — кімната й обмін повідомленнями. `Net.role`: `null` / `'host'` / `'guest'`. `Net.live()` — є з ким грати (тоді паузи немає).
-- Зв'язок (етап 24): гра бачить лише канали гравців — `Net.links[pid]` у хоста, `Net.hostLink` у гостя (`{kind:'bc'|'rtc', send, close}`). Два шляхи: вкладки одного браузера (`BroadcastChannel`) та інтернет — WebRTC data channel напряму; знайомство (стук → пропозиція → відповідь) через `Signal` — ntfy-сумісний сервіс `CONFIG.coop.signalUrl` (`POST /тема`, `GET /тема/sse`). STUN/TURN — `CONFIG.coop.iceServers`.
+- Зв'язок (етап 24): гра бачить лише канали гравців — `Net.links[pid]` у хоста, `Net.hostLink` у гостя (`{kind:'bc'|'rtc', send, close}`). Два шляхи: вкладки одного браузера (`BroadcastChannel`) та інтернет — WebRTC data channel напряму; знайомство (стук → пропозиція → відповідь) через `Signal` — одночасно ntfy-сумісний сервіс `CONFIG.coop.signalUrl` (`POST /тема`, `GET /тема/sse`) і MQTT-брокери `CONFIG.coop.mqttUrls` (власний мінімальний клієнт `MqttLink`); повтори відкидаються за `mid`. STUN/TURN — `CONFIG.coop.iceServers`.
+- Третій шлях — власний сервер `server/coop-server.py` (лише стандартна бібліотека Python): WebSocket `/ws?room=КОД&id=…`, пересилає за полем `to`, роздає гру з `window.CPR_SERVER`. У грі — поле «Сервер» (`coopServerBase()`, `Net.openServer`); канал `kind:'srv'`.
 - Згорнута вкладка: браузер зупиняє `requestAnimationFrame`, тому в кооперативі гру крутить `setInterval`, що надолужує час (`bgStep`, `bgMaxSteps`); про згортання сторони повідомляють одна одну (`vis`), і тоді діє довший тайм-аут `timeoutHidden`.
 - **Хост рахує світ** (вороги, здобич, час, погода, прапорці, завдання). **Кожен гравець рахує свого героя**: `Game.hero` / `heroData` / `derived` завжди означають *свого* героя, тому навички, інвентар і дерево навичок працюють без змін.
 - Інші гравці — `Net.remotes` (`Critter` з `isHero` і `isRemote`). Вороги обирають ціль через `coopTargetHero(e)`; шкода чужому герою — `Net.hurtRemote` (через `Game._aiTarget`), відкидання — `Net.knockRemote`.
@@ -56,7 +57,7 @@
 - Підземелля: хост пересилає насіння (`Net.seeds`), тож коридори однакові.
 - Герої гостей зберігаються в `Game.flags.party[ім'я гравця]` (лише в хоста). Гостю прапорці надсилаються без `party` (`Net.flagsForGuest`).
 - У гостя вимкнено: збереження, переходи між локаціями, розмови / двері / торгівлю, події в дорозі, набіги, власних союзників, зміни завдань.
-- Тести: `tests/legacy/test27.py` (дві вкладки одного браузера), `tests/legacy/test28.py` (WebRTC між різними профілями; знайомство через локальну імітацію `tests/ntfy_mock.py`).
+- Тести: `tests/legacy/test27.py` (дві вкладки одного браузера), `tests/legacy/test28.py` (WebRTC між різними профілями; знайомство через локальну імітацію `tests/ntfy_mock.py`), `tests/legacy/test29.py` (через сервер на ПК).
 
 ## Перевірка після кожної зміни
 

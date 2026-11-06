@@ -7,7 +7,7 @@ os.makedirs(SHOTS,exist_ok=True)
 from playwright.sync_api import sync_playwright
 s=socket.socket();s.bind(('127.0.0.1',0));PORT=s.getsockname()[1];s.close()
 srv=subprocess.Popen([sys.executable,str(ROOT/'tests'/'ntfy_mock.py'),str(PORT)]);time.sleep(0.6)
-SETUP=f"CONFIG.coop.signalUrl='http://127.0.0.1:{PORT}/';CONFIG.coop.iceServers=[];CONFIG.coop.iceWait=1"
+SETUP=f"CONFIG.coop.mqttUrls=[];CONFIG.coop.signalUrl='http://127.0.0.1:{PORT}/';CONFIG.coop.iceServers=[];CONFIG.coop.iceWait=1"
 errs=[]
 def check(cond,what):
     print(('ok  ' if cond else 'FAIL'),what)
