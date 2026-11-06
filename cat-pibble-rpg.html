@@ -8486,6 +8486,7 @@ class MqttLink {
       else if(type===3){const tl=(body[0]<<8)|body[1],qos=(b[0]>>1)&3,start=2+tl+(qos?2:0);
         try{this.onMsg(new TextDecoder().decode(body.subarray(start)));}catch(e){}}}
   }
+  pubTo(topic,text){if(this.ok){const p=new TextEncoder().encode(text);this.raw(0x30,[...this.str(topic),...p]);}}
   pub(text){if(this.ok){const p=new TextEncoder().encode(text);this.raw(0x30,[...this.str(this.topic),...p]);}}
   close(){const w=this.ws;this.ws=null;this.ok=false;clearInterval(this.ping);if(w){try{this.raw.call({ws:w},0xE0,[]);w.close();}catch(e){}}}
 }
@@ -8517,6 +8518,19 @@ function coopServerBase(){return String(window.CPR_SERVER||'').trim();}
 function coopServerWs(base,room,id){let u=base.trim().replace(/\/+$/,'');
   if(!/^[a-z]+:\/\//i.test(u))u=(/^(localhost|127\.|10\.|192\.168\.)/.test(u)?'http://':'https://')+u;
   u=u.replace(/^http/i,'ws');return `${u}/ws?room=${encodeURIComponent(room)}&id=${encodeURIComponent(id)}`;}
+/* Запасний шлях для самої гри: через публічні MQTT-брокери (якщо пристрій не достукується до сервера гри
+   або пряме з'єднання не вдалося). Кожен гравець слухає свою тему; повідомлення йдуть усіма брокерами, повтори відкидаються. */
+const MqttRelay={links:[],seen:new Set(),seenQ:[],base:null,
+  topic(code,who){return 'catpibble-rpg/v1/r/'+code+'/'+who;},
+  open(code,who,on){this.close();this.base=code;
+    for(const u of CONFIG.coop.mqttUrls||[])this.links.push(new MqttLink(u,this.topic(code,who),t=>this.got(t,on),()=>{}));},
+  got(t,on){let m;try{m=JSON.parse(t);}catch(e){return;}if(!m||!m._q||this.seen.has(m._q))return;
+    this.seen.add(m._q);this.seenQ.push(m._q);if(this.seenQ.length>600)this.seen.delete(this.seenQ.shift());delete m._q;on(m);},
+  pub(who,m){if(!this.base)return;m._q=Math.random().toString(36).slice(2,11);const t=JSON.stringify(m),tp=this.topic(this.base,who);for(const l of this.links)l.pubTo(tp,t);},
+  ok(){return this.links.some(l=>l.ok);},
+  link(who){return {kind:'mqtt',send:m=>{m.to=m.to||who;MqttRelay.pub(who,m);},close(){}};},
+  close(){for(const l of this.links)l.close();this.links=[];this.base=null;},
+};
 function coopTopic(code){return 'catpibble-rpg-coop-'+code;}
 const RTC={
   gathered(pc){if(pc.iceGatheringState==='complete')return Promise.resolve();
@@ -8562,7 +8576,7 @@ const Net={
   closeCh(){
     if(this.bc){try{this.bc.close();}catch(e){}this.bc=null;}
     if(this.srv){const w=this.srv;this.srv=null;setTimeout(()=>{try{w.close();}catch(e){}},300);}this.srvOk=false;
-    Signal.close();this.sigOk=false;
+    Signal.close();this.sigOk=false;MqttRelay.close();
     const pcs=Object.values(this.pcs);setTimeout(()=>{for(const pc of pcs){try{pc.close();}catch(e){}}},300);
     this.pcs={};this.links={};this.hostLink=null;
   },
@@ -8654,6 +8668,7 @@ const Net={
     if(base)this.openServer(base,'host');
     this.sigOk=typeof RTCPeerConnection!=='undefined'&&Signal.sub(coopTopic(this.room),m=>this.hostSig(m),ok=>{this.sigOk=ok;this.renderPanel();});
     if(!local&&!this.sigOk){this.role=null;UI.toast('Браузер не підтримує кооператив.',3);return;}
+    if(typeof WebSocket!=='undefined')MqttRelay.open(this.room,'host',m=>{if(m&&m.from)this.recv(m,this.links[m.from]&&this.links[m.from].kind!=='mqtt'?null:MqttRelay.link(m.from));});
     Game.flags.party=Game.flags.party||{};
     this.locs={host:this.myLoc()};this.since={host:performance.now()};this.auth={[this.myLoc()]:'host'};
     UI.toast(`Кімнату ${this.room} створено.`,2.5);
@@ -8700,7 +8715,7 @@ const Net={
   onHost(m){
     const p=this.peers[m.from];if(p)p.last=performance.now();
     switch(m.k){
-      case 'hello':{
+      case 'hello':{if(this.peers[m.from])return;
         const key=coopKey(m.name);if(!key){this.to(m.from,{k:'nope',msg:'Вкажи ім’я гравця.'});return;}
         if(this.roomSize()>=CONFIG.coop.maxPlayers){this.to(m.from,{k:'nope',msg:'Кімната заповнена (до '+CONFIG.coop.maxPlayers+' гравців).'});return;}
         if(Object.values(this.peers).some(q=>q.key===key)){this.to(m.from,{k:'nope',msg:'Гравець із таким ім’ям уже в кімнаті.'});return;}
@@ -8741,13 +8756,20 @@ const Net={
     }
     const base=coopServerBase();
     const direct=this._direct;this._direct=false;
-    if(base&&!direct){this._viaMain=!window.CPR_SERVER;this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='srv';this.msg('Підключаюсь…');if(!this.openServer(base,this.pid)){this.reset();this.msg('Неправильна адреса сервера.');}return;}
-    if(typeof RTCPeerConnection==='undefined'){this.reset();this.msg('Цей браузер не підтримує гру через інтернет.');return;}
+    if(base&&!direct&&mode!=='mqtt'){this._viaMain=!window.CPR_SERVER;this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='srv';this.msg('Підключаюсь…');if(!this.openServer(base,this.pid)){this.reset();this.msg('Неправильна адреса сервера.');}return;}
+    if(mode==='mqtt'||MainServer.state==='blocked'||typeof RTCPeerConnection==='undefined'){this.joinMqtt(name,code);return;}
     this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='net';this.msg('Шукаю кімнату…');
     let tries=0;const knock=()=>{if(!this.isGuest()||this.pcs.host||tries>=CONFIG.coop.helloRetry)return;tries++;Signal.pub({t:'hello',from:this.pid});setTimeout(knock,3000);};
     Signal._onOpen=null;
     if(!Signal.sub(coopTopic(code),m=>this.guestSig(m),ok=>{if(!ok&&this.isGuest()&&!this.hostLink&&!this.pcs.host)this.msg('Немає зв’язку. Перевір інтернет.');})){this.reset();this.msg('Цей браузер не підтримує гру через інтернет.');return;}
     Signal._onOpen=()=>{Signal._onOpen=null;knock();};
+  },
+  joinMqtt(name,code){
+    if(typeof WebSocket==='undefined'||!(CONFIG.coop.mqttUrls||[]).length){this.reset();this.msg('Не вдалося з’єднатися.');return;}
+    this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='mqtt';this._gotReply=false;this.msg('З’єднуюсь через запасний шлях…');
+    MqttRelay.open(code,this.pid,m=>this.recv(m,null));
+    this.hostLink=MqttRelay.link('host');
+    let tries=0;const knock=()=>{if(!this.isGuest()||this._gotReply||this._joinMode!=='mqtt'||tries>=6)return;if(MqttRelay.ok()){tries++;this.send({k:'hello',name});}setTimeout(knock,MqttRelay.ok()?3000:500);};knock();
   },
   leave(){
     if(!this.isGuest())return;
@@ -8761,7 +8783,7 @@ const Net={
     UI.toast(msg||'Хост завершив гру.',3.5);
   },
   onGuest(m){
-    this._lastHost=performance.now();
+    this._lastHost=performance.now();this._gotReply=true;
     switch(m.k){
       case 'nope':if(this._joinMode==='srv'&&!Game.heroData&&(m.code==='noroom'||/не знайдено/.test(m.msg||''))){const n=this.name,c=this.room;this.reset();this._direct=true;this.msg('Шукаю кімнату напряму…');this.join(n,c,'net');return;}
         this.reset();this.msg(m.msg);if(Game.state==='create'){UI.hide('create');UI.show('menu');Game.state='menu';this.openPanel();this.msg(m.msg);}return;
@@ -8960,7 +8982,8 @@ const Net={
     this.ghostProj=[].concat(...Object.values(this._pj));
     for(const p of this.ghostProj){p.x+=p.dx*p.speed*dt;p.y+=p.dy*p.speed*dt;}
     if(this.isGuest()){
-      if(this._joinT>0){this._joinT-=dt;if(this._joinT<=0){const mode=this._joinMode,had=!!this.pcs.host;this.reset();
+      if(this._joinT>0){this._joinT-=dt;if(this._joinT<=0&&this._joinMode==='net'&&!Game.heroData){const n=this.name,c=this.room;this.reset();this.join(n,c,'mqtt');return;}
+        if(this._joinT<=0){const mode=this._joinMode,had=!!this.pcs.host;this.reset();
         this.msg(mode==='srv'?'Сервер не відповів. Перевір код кімнати.':mode==='local'?'Кімнату не знайдено.':had?'Не вдалося з’єднатися. Спробуйте Wi‑Fi або сервер гри.':'Кімнату не знайдено. Перевір код.');}return;}
       if(!Game.heroData||!Game.hero)return;
       if(now-this._lastHost>(this._hostHidden?C.timeoutHidden:C.timeout)*1000){this.hostGone('Зв’язок із хостом утрачено.');return;}
