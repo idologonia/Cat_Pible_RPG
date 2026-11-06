@@ -1049,7 +1049,7 @@ const CONFIG = {
      mainServer — де гра шукає адресу сервера гри (server/start-server.bat на ПК) і як часто перевіряє, чи він онлайн;
      fresh — скільки секунд оголошення вважається свіжим (сервер онлайн, хоч цей пристрій до нього й не достукався);
      xpRadius — у якому радіусі від убитого ворога герой отримує досвід; enemyHpPerPlayer — +здоров'я ворогам за кожного гравця понад одного */
-  coop: { maxPlayers:4, sendHz:12, timeout:6, timeoutHidden:180, bgStep:0.05, bgMaxSteps:24, joinWait:4, joinWaitNet:25, helloRetry:3, iceWait:2.5,
+  coop: { maxPlayers:4, sendHz:12, timeout:6, timeoutHidden:180, bgStep:0.05, bgMaxSteps:24, joinWait:4, joinWaitNet:25, directWait:10, helloRetry:3, iceWait:2.5,
     signalUrl:'https://ntfy.sh/', mqttUrls:['wss://broker.hivemq.com:8884/mqtt','wss://broker.emqx.io:8084/mqtt','wss://test.mosquitto.org:8081/mqtt'], iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}],
     mainServer:{ mqttTopic:'catpibble-rpg/v1/main-server', ntfyTopic:'catpibble-rpg-v1-main-server', every:20, wait:4, fresh:900, allowAny:false },
     xpRadius:22, questShare:1, fxPerPacket:40, talkLock:20, enemyHpPerPlayer:0.5, heroSaveEvery:5, flagsEvery:2, lerp:14, spawnSpread:1.2 },
@@ -8758,7 +8758,7 @@ const Net={
     const direct=this._direct;this._direct=false;
     if(base&&!direct&&mode!=='mqtt'){this._viaMain=!window.CPR_SERVER;this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='srv';this.msg('Підключаюсь…');if(!this.openServer(base,this.pid)){this.reset();this.msg('Неправильна адреса сервера.');}return;}
     if(mode==='mqtt'||MainServer.state==='blocked'||typeof RTCPeerConnection==='undefined'){this.joinMqtt(name,code);return;}
-    this._joinT=CONFIG.coop.joinWaitNet;this._joinMode='net';this.msg('Шукаю кімнату…');
+    this._joinT=CONFIG.coop.directWait;this._joinMode='net';this.msg('Шукаю кімнату…');
     let tries=0;const knock=()=>{if(!this.isGuest()||this.pcs.host||tries>=CONFIG.coop.helloRetry)return;tries++;Signal.pub({t:'hello',from:this.pid});setTimeout(knock,3000);};
     Signal._onOpen=null;
     if(!Signal.sub(coopTopic(code),m=>this.guestSig(m),ok=>{if(!ok&&this.isGuest()&&!this.hostLink&&!this.pcs.host)this.msg('Немає зв’язку. Перевір інтернет.');})){this.reset();this.msg('Цей браузер не підтримує гру через інтернет.');return;}
@@ -8785,7 +8785,7 @@ const Net={
   onGuest(m){
     this._lastHost=performance.now();this._gotReply=true;
     switch(m.k){
-      case 'nope':if(this._joinMode==='srv'&&!Game.heroData&&(m.code==='noroom'||/не знайдено/.test(m.msg||''))){const n=this.name,c=this.room;this.reset();this._direct=true;this.msg('Шукаю кімнату напряму…');this.join(n,c,'net');return;}
+      case 'nope':if(this._joinMode==='srv'&&!Game.heroData&&(m.code==='noroom'||/не знайдено/.test(m.msg||''))){const n=this.name,c=this.room;this.reset();this.join(n,c,'mqtt');return;}
         this.reset();this.msg(m.msg);if(Game.state==='create'){UI.hide('create');UI.show('menu');Game.state='menu';this.openPanel();this.msg(m.msg);}return;
       case 'newHero':
         this._joinT=0;this._creating=true;UI.hide('coop');UI.hide('menu');UI.openCreate();

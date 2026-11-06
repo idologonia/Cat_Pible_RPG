@@ -7,12 +7,13 @@ os.makedirs(SHOTS,exist_ok=True)
 from playwright.sync_api import sync_playwright
 def port():
     s=socket.socket();s.bind(('127.0.0.1',0));p=s.getsockname()[1];s.close();return p
-NP,SP=port(),port()
+NP,SP,WP=port(),port(),port()
+br=subprocess.Popen([sys.executable,str(ROOT/'tests'/'mqtt_broker.py'),str(WP)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 mock=subprocess.Popen([sys.executable,str(ROOT/'tests'/'ntfy_mock.py'),str(NP)]);time.sleep(0.5)
 SURL=f'http://127.0.0.1:{SP}'
 srv=subprocess.Popen([sys.executable,str(ROOT/'server'/'coop-server.py'),'--port',str(SP),'--announce-url',SURL,'--brokers','','--ntfy',f'http://127.0.0.1:{NP}/','--name','Сервер Тест'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True)
 time.sleep(4.5)
-SETUP=f"CONFIG.coop.mqttUrls=[];CONFIG.coop.signalUrl='http://127.0.0.1:{NP}/';CONFIG.coop.iceServers=[];CONFIG.coop.mainServer.allowAny=true;CONFIG.coop.mainServer.wait=2"
+SETUP=f"CONFIG.coop.mqttUrls=['ws://127.0.0.1:{WP}/'];CONFIG.coop.signalUrl='http://127.0.0.1:{NP}/';CONFIG.coop.iceServers=[];CONFIG.coop.mainServer.allowAny=true;CONFIG.coop.mainServer.wait=2"
 errs=[]
 def check(cond,what):
     print(('ok  ' if cond else 'FAIL'),what)
@@ -61,7 +62,7 @@ try:
     for i in range(60):
         G.wait_for_timeout(250)
         if G.evaluate("Game.state")=='create':break
-    check(G.evaluate("Game.state")=='create' and G.evaluate("Net.hostLink&&Net.hostLink.kind")=='rtc','кімнати на сервері немає — гість сам підключився напряму')
+    check(G.evaluate("Game.state")=='create' and G.evaluate("Net.hostLink&&Net.hostLink.kind")=='mqtt','кімнати на сервері немає — гість одразу пішов запасним шляхом')
     # сервер вимикається (Ctrl+C) — оголошує «офлайн»
     srv.send_signal(signal.SIGINT);srv.wait(timeout=10)
     out=srv.stdout.read();print('server:',' | '.join(l for l in out.splitlines() if l.strip())[:300])
@@ -77,6 +78,6 @@ try:
     A.screenshot(path=SHOTS+'srv28_blocked.png')
     print('ERRORS',errs[:6]);b.close()
 finally:
-    for pr in (srv,mock):
+    for pr in (srv,mock,br):
         try:pr.terminate()
         except Exception:pass
