@@ -1038,10 +1038,11 @@ const CONFIG = {
      signalUrl, mqttUrls — публічні сервіси для знайомства гравців через інтернет; працюють одночасно, досить будь-якого одного
      (сама гра йде напряму між браузерами, WebRTC);
      iceServers — STUN/TURN-сервери для прямого з'єднання; сюди ж можна додати власний TURN (наприклад, на ПК хоста);
+     questShare — яку частку досвіду й золота за завдання загону (його виконує хост) отримує кожен гість;
      xpRadius — у якому радіусі від убитого ворога герой отримує досвід; enemyHpPerPlayer — +здоров'я ворогам за кожного гравця понад одного */
   coop: { maxPlayers:4, sendHz:12, timeout:6, timeoutHidden:180, bgStep:0.05, bgMaxSteps:24, joinWait:4, joinWaitNet:25, helloRetry:3, iceWait:2.5,
     signalUrl:'https://ntfy.sh/', mqttUrls:['wss://broker.hivemq.com:8884/mqtt','wss://broker.emqx.io:8084/mqtt','wss://test.mosquitto.org:8081/mqtt'], iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}],
-    xpRadius:22, enemyHpPerPlayer:0.5, heroSaveEvery:5, flagsEvery:2, lerp:14, spawnSpread:1.2 },
+    xpRadius:22, questShare:1, enemyHpPerPlayer:0.5, heroSaveEvery:5, flagsEvery:2, lerp:14, spawnSpread:1.2 },
 };
 
 /* ===================== 2. ДАНІ ===================== */
@@ -8778,6 +8779,7 @@ const Net={
       case 'dmg':{const h=Game.hero;if(!h||h.dead)return;Game._aiSrc=m.el?{elite:m.el,dead:true}:null;try{heroTakeDamage(m.a,m.fx,m.fy);}finally{Game._aiSrc=null;}return;}
       case 'knock':if(Game.hero&&!Game.hero.dead)heroKnock(Game.hero,m.dx,m.dy,m.p);return;
       case 'kill':this.onKill(m.id);return;
+      case 'qdone':coopQuestReward(m);return;
       case 'cleared':{const hd=Game.heroData,C=CONFIG.dungeon,lv=Math.max(hd.level,m.loc==='mine'?C.mineLevel:C.baseLevel);gainXp(C.clearXpBase+C.clearXpPerLevel*lv);return;}
       case 'gold':{const hd=Game.heroData,h=Game.hero;hd.gold+=m.a;AudioSys.play('coin',{gap:0.06});floatText(h.x,h.y,46,`+${m.a} золота`,'#ffd23a',false,0.85);UI.updateHUD();return;}
       case 'item':{const hd=Game.heroData,h=Game.hero,it=m.it;if(!it||!ITEM_BASES[it.base])return;
@@ -8922,7 +8924,7 @@ const Net={
       $('btnCoopClose').onclick=()=>this.closeRoom();
     }else if(this.isGuest()&&Game.heroData){
       b.innerHTML=`<div class="sectionT">Ти в кімнаті ${esc(this.room)}</div>${list()}
-        <div class="invHint">Твій герой зберігається в грі хоста. Розмови з мешканцями, торгівля, двері й переходи — у хоста; гості поки що б’ються, підбирають здобич і розвивають героя.</div>
+        <div class="invHint">Твій герой зберігається в грі хоста. Ти можеш торгувати, користуватися ковалем, алхімією, сховищем і збирати ресурси. Завдання, контракти, двері й переходи веде хост, а нагороду за завдання отримує весь загін.</div>
         <div class="coopRow"><button class="btn small secondary" id="btnCoopLeave">Вийти з кімнати</button></div>`;
       $('btnCoopLeave').onclick=()=>this.leave();
     }else if(this._from==='game'){
@@ -9007,7 +9009,7 @@ function installCoopHooks(){
     return f.call(this,to,pos);};}
   {const f=G.interact;G.interact=function(target){
     const t=target||this.interactTarget;
-    if(Net.isGuest()&&t&&!t.isGround){if(this.time-(this._coopIT||0)>1.5){this._coopIT=this.time;UI.toast('У кооперативі розмови, торгівля й двері — у хоста. Гості поки що б’ються й підбирають здобич.',3);}return;}
+    if(Net.isGuest()&&t&&!t.isGround&&!t.isNpc&&!coopGuestObject(t)){if(this.time-(this._coopIT||0)>1.5){this._coopIT=this.time;UI.toast('Це робить хост: двері, скрині, дошки контрактів і завдання веде він.',3);}return;}
     return f.call(this,target);};}
   {const f=G.onEnemyKilled;G.onEnemyKilled=function(e){
     const h=this.hero;Net._noXp=Net.live()&&(!h||h.dead||Math.hypot(h.x-e.x,h.y-e.y)>CONFIG.coop.xpRadius);
@@ -9066,6 +9068,46 @@ function installCoopHooks(){
   window.addEventListener('beforeunload',()=>{if(Net.isHost())Net.send({k:'end'});else if(Net.isGuest()&&Game.heroData)Net.send({k:'bye',hd:coopClone(Game.heroData)});});
 }
 
+/* ===================== ЕТАП 25: ГОСТІ В МИРНОМУ ЖИТТІ ===================== */
+/* Гості розмовляють із мешканцями, торгують, користуються ковалем, алхімією, сховищем і збирають ресурси
+   (усе це — справи їхнього героя). Завдання загону веде хост: у розмовах гостя пункти завдань замінено підказкою,
+   а нагороду (досвід і золото) за виконане хостом завдання чи контракт отримує кожен гість. */
+/* Об'єкти, якими гість користується сам: сховище в місті й ресурсні вузли (у кожного гравця свої) */
+function coopGuestObject(o){const a=o.interact&&o.interact.action;return !!(o.res||(a&&/Game\.openStash\(\)/.test(String(a))));}
+/* Мешканці, чиї розмови гостю можна повністю (лише поради, без рішень) */
+const COOP_GUEST_TALK_OK=['guide'];
+function installCoopPeaceHooks(){
+  // розмова гостя: усе, крім рішень щодо завдань
+  {const f=talkTo;talkTo=function(npc){
+    if(!Net.isGuest())return f(npc);
+    const q=COOP_GUEST_TALK_OK.includes(npc.id)?null:QUEST_TALK[npc.id];
+    if(q)QUEST_TALK[npc.id]=nodes=>{let o=[];try{o=q(nodes)||[];}catch(e){}
+      // послуги (торгівля) лишаються; кімната на ніч переводить годинник світу — це вирішує хост
+      const keep=o.filter(x=>x.kind==='shop'&&!/rentRoom/.test(String(x.fn))),rest=o.length-keep.length;
+      if(!rest)return keep;
+      nodes.coopq={text:`Завдання загону веде хост${Net._hostName?' — '+Net._hostName:''}. Про це краще поговорити з ним, а нагороду отримаєте всі.`,opts:[{label:'Добре',to:'root'}]};
+      return [...keep,{label:'Про завдання…',kind:'quest',to:'coopq'}];};
+    try{return f(npc);}finally{if(q)QUEST_TALK[npc.id]=q;}};}
+  // нагорода за завдання загону — кожному гостю
+  {const f=Quests.complete;Quests.complete=function(id,extra){
+    const def=QUESTS[id],R=(def&&def.reward)||{},title=def&&def.title;
+    const r=f.call(this,id,extra);
+    if(Net.isHost()&&Object.keys(Net.peers).length&&title)Net.send({k:'qdone',title,xp:R.xp||0,gold:R.gold||0});
+    return r;};}
+  // досягнення гостя — у його герої (прапорці світу в гостя щоразу перезаписує хост)
+  {const f=checkAchievements;checkAchievements=function(){
+    const F=Game.flags,hd=Game.heroData;if(!Net.isGuest()||!F||!hd)return f();
+    const A0=F.ach;F.ach=hd.coopAch||(hd.coopAch={});try{return f();}finally{F.ach=A0;}};}
+}
+function coopQuestReward(m){
+  const hd=Game.heroData,h=Game.hero;if(!hd||!h)return;
+  const k=CONFIG.coop.questShare,gold=Math.round((m.gold||0)*k),xp=Math.round((m.xp||0)*k);
+  UI.questPopup('Завдання загону виконано',m.title);
+  if(gold){hd.gold+=gold;floatText(h.x,h.y,58,`+${gold} золота`,'#ffd23a',false,0.9);}
+  if(xp)gainXp(xp);
+  UI.updateHUD();
+}
+
 /* ---------- Вступ ---------- */
 const INTRO = [
   {text:'Далеко за Молочними пагорбами, серед теплих полів і затишних сіл, жили котики та їхні вірні друзі — піблики.',scene:0},
@@ -9105,7 +9147,7 @@ const Game = {
   shops:{}, timers:[], traps:[], npcs:[], combatants:[], projectiles:[], zones:[], vfx:[], floatTexts:[], groundItems:[], coins:[], shake:0,
   introI:0, menuCamT:0, talkCooldown:0, wasSafe:false,
   init(){
-    Render.init();Input.init();installAudioHooks();installMetaHooks();installTavernHooks();installCoopHooks();
+    Render.init();Input.init();installAudioHooks();installMetaHooks();installTavernHooks();installCoopHooks();installCoopPeaceHooks();
     this.loadLocation('outskirts');
     this.bindUI();bindAudioUI();bindSaveIO();
     this.drawMenuHeroes();
