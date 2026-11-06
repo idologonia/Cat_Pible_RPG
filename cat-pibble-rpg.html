@@ -1050,7 +1050,7 @@ const CONFIG = {
      mainServer — де гра шукає адресу сервера гри (server/start-server.bat на ПК) і як часто перевіряє, чи він онлайн;
      fresh — скільки секунд оголошення вважається свіжим (сервер онлайн, хоч цей пристрій до нього й не достукався);
      xpRadius — у якому радіусі від убитого ворога герой отримує досвід; enemyHpPerPlayer — +здоров'я ворогам за кожного гравця понад одного */
-  coop: { maxPlayers:4, sendHz:12, timeout:6, timeoutHidden:180, bgStep:0.05, bgMaxSteps:24, joinWait:4, joinWaitNet:25, directWait:10, helloRetry:3, iceWait:2.5,
+  coop: { maxPlayers:4, sendHz:12, mqttHz:8, remoteTimeout:6, timeout:6, timeoutHidden:180, bgStep:0.05, bgMaxSteps:24, joinWait:4, joinWaitNet:25, directWait:10, helloRetry:3, iceWait:2.5,
     signalUrl:'https://ntfy.sh/', mqttUrls:['wss://broker.hivemq.com:8884/mqtt','wss://broker.emqx.io:8084/mqtt','wss://test.mosquitto.org:8081/mqtt'], iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'}],
     mainServer:{ mqttTopic:'catpibble-rpg/v1/main-server', ntfyTopic:'catpibble-rpg-v1-main-server', every:20, wait:4, fresh:900, allowAny:false },
     xpRadius:22, questShare:1, fxPerPacket:40, talkLock:20, enemyHpPerPlayer:0.5, heroSaveEvery:5, flagsEvery:2, lerp:14, spawnSpread:1.2 },
@@ -8521,13 +8521,14 @@ function coopServerWs(base,room,id){let u=base.trim().replace(/\/+$/,'');
   u=u.replace(/^http/i,'ws');return `${u}/ws?room=${encodeURIComponent(room)}&id=${encodeURIComponent(id)}`;}
 /* Запасний шлях для самої гри: через публічні MQTT-брокери (якщо пристрій не достукується до сервера гри
    або пряме з'єднання не вдалося). Кожен гравець слухає свою тему; повідомлення йдуть усіма брокерами, повтори відкидаються. */
-const MqttRelay={links:[],seen:new Set(),seenQ:[],base:null,
+const MqttRelay={links:[],seen:new Set(),seenQ:[],base:null,via:{},
   topic(code,who){return 'catpibble-rpg/v1/r/'+code+'/'+who;},
-  open(code,who,on){this.close();this.base=code;
-    for(const u of CONFIG.coop.mqttUrls||[])this.links.push(new MqttLink(u,this.topic(code,who),t=>this.got(t,on),()=>{}));},
-  got(t,on){let m;try{m=JSON.parse(t);}catch(e){return;}if(!m||!m._q||this.seen.has(m._q))return;
+  open(code,who,on){this.close();this.base=code;this.via={};
+    (CONFIG.coop.mqttUrls||[]).forEach((u,i)=>this.links.push(new MqttLink(u,this.topic(code,who),t=>this.got(t,on,i),()=>{})));},
+  got(t,on,i){let m;try{m=JSON.parse(t);}catch(e){return;}if(!m||!m._q||this.seen.has(m._q))return;
+    if(m.from&&this.via[m.from]==null)this.via[m.from]=i;   // відповідаємо тим самим сервісом, яким прийшло
     this.seen.add(m._q);this.seenQ.push(m._q);if(this.seenQ.length>600)this.seen.delete(this.seenQ.shift());delete m._q;on(m);},
-  pub(who,m){if(!this.base)return;m._q=Math.random().toString(36).slice(2,11);const t=JSON.stringify(m),tp=this.topic(this.base,who);for(const l of this.links)l.pubTo(tp,t);},
+  pub(who,m){if(!this.base)return;m._q=Math.random().toString(36).slice(2,11);const t=JSON.stringify(m),tp=this.topic(this.base,who),i=this.via[who],L=i!=null&&this.links[i]&&this.links[i].ok?[this.links[i]]:this.links;for(const l of L)l.pubTo(tp,t);},
   ok(){return this.links.some(l=>l.ok);},
   link(who){return {kind:'mqtt',send:m=>{m.to=m.to||who;MqttRelay.pub(who,m);},close(){}};},
   close(){for(const l of this.links)l.close();this.links=[];this.base=null;},
@@ -8979,7 +8980,7 @@ const Net={
     if(!this.role)return;
     const C=CONFIG.coop,now=performance.now(),k=1-Math.exp(-C.lerp*dt);
     for(const r of this.remotes.concat(this.ghostAllies)){if(r.tx==null)continue;r.x+=(r.tx-r.x)*k;r.y+=(r.ty-r.y)*k;r.idleT=(r.idleT||0)+dt;r.hurtT=Math.max(0,(r.hurtT||0)-dt);}
-    this.remotes=this.remotes.filter(r=>now-(r._seen||now)<2500);
+    {const L=this.myLoc();this.remotes=this.remotes.filter(r=>now-(r._seen||now)<C.remoteTimeout*1000&&(!this.locs[r.pid]||this.locs[r.pid]===L));}
     this.ghostProj=[].concat(...Object.values(this._pj));
     for(const p of this.ghostProj){p.x+=p.dx*p.speed*dt;p.y+=p.dy*p.speed*dt;}
     if(this.isGuest()){
@@ -9000,9 +9001,10 @@ const Net={
     // розмова з мешканцем закінчилась — звільняємо його
     if(this.talking){if(Game.state!=='dialog'){this.toAll({k:'talk',key:this.talking,on:0});this.talking=null;}
       else if(now-(this._talkT||0)>5000){this._talkT=now;this.toAll({k:'talk',key:this.talking,on:1,name:Game.heroData.name});}}
-    this._sendT-=dt;if(this._sendT>0)return;this._sendT=1/C.sendHz;
+    const mq=this.isGuest()?!!(this.hostLink&&this.hostLink.kind==='mqtt'):Object.values(this.links).some(l=>l.kind==='mqtt');
+    this._sendT-=dt;if(this._sendT>0)return;this._sendT=1/(mq?C.mqttHz:C.sendHz);
     const G=Game,h=G.hero,hd=G.heroData;if(G.state==='travel'||G._traveling)return;
-    this._lookT-=1/C.sendHz;
+    this._lookT-=this._sendT;
     // свій герой — усім на локації (хост ще й веде облік, де хто)
     const st={k:'st',h:heroTuple(h,hd,G.derived),nm:hd.name,pj:G.projectiles.filter(p=>p.owner==='hero').map(p=>projTuple(p,this.pid).slice(0,7))};
     if(this._lookT<=0){this._lookT=2;st.lk=h.look;}
@@ -9011,11 +9013,11 @@ const Net={
     // локація, яку я рахую, — тим, хто на ній
     if(!this._mirror&&this.others(this.myLoc()).length)this.toLoc(this.snapshot());
     if(this.isHost()){
-      this._locsT-=1/C.sendHz;if(this._locsT<=0){this._locsT=2;this.send(this.locsMsg());}
-      this._flagsT-=1/C.sendHz;if(this._flagsT<=0){this._flagsT=C.flagsEvery;const f=this.flagsForGuest(),ack={...(this._acks||{})},j=JSON.stringify([f,ack]);if(j!==this._flagsJson){this._flagsJson=j;this.send({k:'flags',f,ack});}}
+      this._locsT-=this._sendT;if(this._locsT<=0){this._locsT=2;this.send(this.locsMsg());}
+      this._flagsT-=this._sendT;if(this._flagsT<=0){this._flagsT=C.flagsEvery;const f=this.flagsForGuest(),ack={...(this._acks||{})},j=JSON.stringify([f,ack]);if(j!==this._flagsJson){this._flagsJson=j;this.send({k:'flags',f,ack});}}
     }else{
-      this._hdT-=1/C.sendHz;if(this._hdT<=0){this._hdT=C.heroSaveEvery;const j=JSON.stringify(hd);if(j!==this._hdJson){this._hdJson=j;this.send({k:'hd',hd:coopClone(hd)});}}
-      this._flagsT-=1/C.sendHz;if(this._flagsT<=0){this._flagsT=1;const p=coopFlagDiff(G.flags,this._base);if(p.length){const seq=this._pseq=(this._pseq||0)+1;(this._inflight||(this._inflight=[])).push({seq,p});coopApplyPatch(this._base,p);this.send({k:'fpatch',p,seq});}}
+      this._hdT-=this._sendT;if(this._hdT<=0){this._hdT=C.heroSaveEvery;const j=JSON.stringify(hd);if(j!==this._hdJson){this._hdJson=j;this.send({k:'hd',hd:coopClone(hd)});}}
+      this._flagsT-=this._sendT;if(this._flagsT<=0){this._flagsT=1;const p=coopFlagDiff(G.flags,this._base);if(p.length){const seq=this._pseq=(this._pseq||0)+1;(this._inflight||(this._inflight=[])).push({seq,p});coopApplyPatch(this._base,p);this.send({k:'fpatch',p,seq});}}
     }
     if(this._mirror&&!h.dead)for(const c of G.coins)if(Math.hypot(c.x-h.x,c.y-h.y)<CONFIG.loot.coinMagnet){const t=(this._pickT||(this._pickT={}));if(now-(t[c.nid]||0)>600){t[c.nid]=now;this.toPid(this.authPid(),{k:'pick',id:c.nid,loc:this.myLoc()});}}
   },
